@@ -11,6 +11,7 @@ import { applyWorkerConfigurationAcknowledgement, applyWorkerConfigurationFailur
 import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 
+import type { PipelineAnalysisUsage } from "./llm-providers.ts";
 
 type WorkerSocketData = { actor: "worker"; workerId: string; workerName?: string; challenge?: Buffer; authenticated: boolean; closed?: boolean; connectionEpoch?: number; authTimer?: NodeJS.Timeout; heartbeatTimer?: NodeJS.Timeout; heartbeatDeadlineTimer?: NodeJS.Timeout };
 type BrowserSocketData = { actor: "browser"; organizationId: string; cursor: number };
@@ -101,6 +102,12 @@ export function createControlPlaneGateway(options: GatewayOptions) {
   const workerMessageTails = new WeakMap<object, Promise<void>>();
 
   let nextWorkerConnectionEpoch = 0;
+  function sendAiUsage(organizationId: string, id: string, kind: "pipeline" | "review", usage: PipelineAnalysisUsage): void {
+    const frame = JSON.stringify({ version: 1, type: "ai_usage", organizationId, id, kind, ...usage });
+    for (const socket of browserSockets) {
+      if (socket.data.actor === "browser" && (socket.data.organizationId === organizationId || socket.data.organizationId === "all")) socket.send(frame);
+    }
+  }
 
   const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "cache-control": "no-store" } });
 
@@ -365,5 +372,5 @@ export function createControlPlaneGateway(options: GatewayOptions) {
     }
     return options.httpFetch(request);
   }
-  return { fetch, websocket, browserSockets, replayBrowserInvalidations };
+  return { fetch, websocket, browserSockets, replayBrowserInvalidations, sendAiUsage };
 }

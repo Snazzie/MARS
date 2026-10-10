@@ -645,6 +645,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         await processPipelineFailureAnalyses({
           db,
           secretBox,
+          onUsageUpdated: (organizationId, id, usage) => gateway.sendAiUsage(organizationId, id, "pipeline", usage),
           generatePipelineAnalysis: input => llmProviders.analyze(input.provider, input.context, input.onUsage, input.onRequest),
           installationToken: installationId => githubApp.getInstallationToken(installationId),
           githubFetchForInstallation: installationId => githubRateLimits.scopedFetch(installationId, "background") as unknown as typeof fetch,
@@ -658,6 +659,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         const [app] = await startupQueries(db).githubAppId.execute({});
         await processPrReviews({
           db, secretBox,
+          onUsageUpdated: (organizationId, id, usage) => gateway.sendAiUsage(organizationId, id, "review", usage),
           providerConfig: id => llmProviders.config(id),
           generate: input => generatePrReview(input),
           installationToken: id => githubApp.getInstallationToken(id),

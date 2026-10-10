@@ -153,8 +153,9 @@ integration("AI work queue preserves attempt identity, paginates tied enqueue ti
       expect(history.items.map(item => [item.id, item.state, item.runAttempt])).toEqual([[skipped, "skipped", 3], [failed, "failed", 2]]);
       expect(history.nextCursor).toBe(failed);
       const older = await listPipelineAnalysisWork(tx, { userId: user }, 2, history.nextCursor, "history");
-      expect(older.nextCursor).toBeNull();
-      expect(older.items.map(item => item.id)).toEqual([completed]);
+      expect(older.nextCursor).toBe(running);
+      expect(older.items.map(item => item.id)).toEqual([completed, running]);
+      expect((await listPipelineAnalysisWork(tx, { userId: user }, 2, older.nextCursor, "history")).items.map(item => item.id)).toEqual([queued]);
       expect(older.items[0]!.metrics).toMatchObject({
         queuedAt: "2026-10-09T00:00:00.000Z", startedAt: "2026-10-09T00:00:05.000Z", finishedAt: "2026-10-09T00:00:25.000Z",
         providerCalledAt: "2026-10-09T00:00:08.000Z", queueWaitMs: 5000, durationMs: 20_000,
@@ -201,7 +202,10 @@ integration("PR review work paginates and scopes workspace membership", async ()
       expect(nextQueued.items.map(item => item.id)).toEqual([secondQueuedId]);
       expect(nextQueued.nextCursor).toBeNull();
       const history = await listPrReviewWork(tx, { organizationId: org }, 1, null, "history");
-      expect(history.items[0]).toMatchObject({ id: ids[1], analysisState: "completed", metrics: { usage: { input: 100, output: 20 }, estimatedCostUsd: 0.25 } });
+      expect(history.items[0]).toMatchObject({ id: secondQueuedId, analysisState: "pending" });
+      const remaining = await listPrReviewWork(tx, { organizationId: org }, 2, history.nextCursor, "history");
+      expect(remaining.items.map(item => item.id)).toEqual([ids[0], ids[1]]);
+      expect(remaining.items[1]).toMatchObject({ analysisState: "completed", metrics: { usage: { input: 100, output: 20 }, estimatedCostUsd: 0.25 } });
       expect((await listPrReviewWork(tx, { userId: crypto.randomUUID() })).items).toEqual([]);
     });
   } finally {

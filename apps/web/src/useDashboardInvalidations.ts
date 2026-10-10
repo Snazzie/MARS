@@ -1,5 +1,19 @@
 import { useEffect } from "react";
 import { useQueryClient, type QueryKey } from "@tanstack/react-query";
+import type { PipelineAnalysisMetrics, PipelineAnalysisWork, PrReviewWork } from "@mars/contracts";
+import type { InfiniteData } from "@tanstack/react-query";
+
+type AiUsageFrame = { version: 1; type: "ai_usage"; organizationId: string; id: string; kind: "pipeline" | "review"; inputTokens: number; outputTokens: number; tokensPerSecond: number | null };
+function parseAiUsage(value: unknown, organizationId: string): AiUsageFrame | null {
+  if (!value || typeof value !== "object") return null;
+  const frame = value as AiUsageFrame;
+  if (frame.version !== 1 || frame.type !== "ai_usage" || (organizationId !== "all" && frame.organizationId !== organizationId) || typeof frame.id !== "string" || !["pipeline", "review"].includes(frame.kind)) return null;
+  if (![frame.inputTokens, frame.outputTokens].every(n => Number.isSafeInteger(n) && n >= 0) || (frame.tokensPerSecond !== null && (!Number.isFinite(frame.tokensPerSecond) || frame.tokensPerSecond < 0))) return null;
+  return frame;
+}
+function liveMetrics(metrics: PipelineAnalysisMetrics, frame: AiUsageFrame): PipelineAnalysisMetrics {
+  return { ...metrics, tokensPerSecond: frame.tokensPerSecond, usage: { input: frame.inputTokens, output: frame.outputTokens, total: frame.inputTokens + frame.outputTokens } };
+}
 
 export type DashboardInvalidation = { version: 1; type: "invalidate"; organizationId: string; sequence: number; keys: string[]; occurredAt: string };
 export type WorkerStatusFrame = { version: 1; type: "worker_status"; workerId: string; state: "online" | "offline"; occurredAt: string };
@@ -53,11 +67,23 @@ export function useDashboardInvalidations(organizationId: string | undefined): v
       socket.onopen = () => {
         attempt = 0;
         void client.invalidateQueries({ predicate: query => workerStatusQueryKey(query.queryKey) });
+        void client.invalidateQueries({ predicate: query => query.queryKey[0] === "org" && query.queryKey[1] === organizationId && ["ai-work", "ai-review-work", "run"].includes(String(query.queryKey[2])) });
       };
       socket.onmessage = (event) => {
         if (event.data === "pong") return;
         let value: unknown;
         try { value = JSON.parse(String(event.data)); } catch { return; }
+        const usage = parseAiUsage(value, organizationId);
+        if (usage) {
+          const resource = usage.kind === "pipeline" ? "ai-work" : "ai-review-work";
+          client.setQueriesData<InfiniteData<{ items: Array<PipelineAnalysisWork | PrReviewWork>; nextCursor: string | null }>>(
+            { queryKey: ["org", organizationId, resource] },
+            data => data ? { ...data, pages: data.pages.map(page => ({ ...page, items: page.items.map(item => item.id === usage.id && item.organizationId === usage.organizationId ? { ...item, metrics: liveMetrics(item.metrics, usage) } : item) })) } : data,
+          );
+          // Run details and summary costs use the persisted, authoritative projection.
+          void client.invalidateQueries({ predicate: query => query.queryKey[0] === "org" && query.queryKey[1] === organizationId && query.queryKey[2] === "run" });
+          return;
+        }
         const workerStatus = parseWorkerStatus(value);
         if (workerStatus) {
           void client.invalidateQueries({ predicate: (query) => workerStatusQueryKey(query.queryKey) });

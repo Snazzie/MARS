@@ -67,6 +67,7 @@ export interface PipelineFailureAnalysisDeps {
   installationBlocked?(installationId: number): boolean;
   githubAppId?: number;
   now?: () => number;
+  onUsageUpdated?(organizationId: string, id: string, usage: PipelineAnalysisUsage): void;
 }
 
 function safeErrorCode(error: unknown): string {
@@ -301,7 +302,10 @@ async function processClaimedAnalysis(deps: PipelineFailureAnalysisDeps, id: str
       provider, context, secretBox: deps.secretBox,
       onRequest: async () => { await statements.markCall.execute({ id }); },
       onUsage: async usage => {
-        if (usage) await statements.recordUsage.execute({ id, ...usage });
+        if (usage) {
+          await statements.recordUsage.execute({ id, ...usage });
+          deps.onUsageUpdated?.(String(analysis.organizationId), id, usage);
+        }
       },
     });
     if ((await statements.superseded.execute({ id })).length || await hasNewerGithubRun(client, owner, repoName, analysis as Record<string, unknown>)) { await statements.skip.execute({ id, errorCode: "analysis_superseded" }); return; }

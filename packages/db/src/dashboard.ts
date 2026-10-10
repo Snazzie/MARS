@@ -495,7 +495,7 @@ const analysisWorkQueries = defineQueries(db => {
     state: a.state, providerName: a.providerName, model: a.model,
     result: a.result, errorCode: a.errorCode, ...analysisMetricsProjection(),
   };
-  const selected = sql`((${sql.placeholder("view")}='queue' AND ${a.state} IN ('pending','running')) OR (${sql.placeholder("view")}='history' AND ${a.state} IN ('completed','failed','skipped')))`;
+  const selected = sql`((${sql.placeholder("view")}='queue' AND ${a.state} IN ('pending','running')) OR ${sql.placeholder("view")}='history')`;
   const afterCursor = sql`(${sql.placeholder("cursor")}::uuid IS NULL OR CASE WHEN ${sql.placeholder("view")}='queue' THEN (${a.createdAt},${a.id}) > (SELECT c.created_at,c.id FROM pipeline_failure_analyses c WHERE c.id=${sql.placeholder("cursor")}::uuid) ELSE (${a.createdAt},${a.id}) < (SELECT c.created_at,c.id FROM pipeline_failure_analyses c WHERE c.id=${sql.placeholder("cursor")}::uuid) END)`;
   const ordering = [
     asc(sql`CASE WHEN ${sql.placeholder("view")}='queue' THEN ${a.createdAt} END`),
@@ -568,7 +568,7 @@ const prReviewWorkQueries = defineQueries(db => {
     tokensPerSecond: review.tokensPerSecond, estimatedCostUsd: review.estimatedCostUsd,
     providerKind: sql<string | null>`${review.providerSnapshot}->>'kind'`,
   };
-  const selected = sql`((${sql.placeholder("view")}='queue' AND ${review.analysisState} IN ('pending','running')) OR (${sql.placeholder("view")}='history' AND ${review.analysisState} IN ('completed','failed','skipped','superseded')))`;
+  const selected = sql`((${sql.placeholder("view")}='queue' AND ${review.analysisState} IN ('pending','running')) OR ${sql.placeholder("view")}='history')`;
   const afterCursor = sql`(${sql.placeholder("cursor")}::uuid IS NULL OR CASE WHEN ${sql.placeholder("view")}='queue' THEN EXISTS (SELECT 1 FROM pr_reviews c WHERE c.id=${sql.placeholder("cursor")}::uuid AND (${review.createdAt},${review.id}) > (c.created_at,c.id)) ELSE EXISTS (SELECT 1 FROM pr_reviews c WHERE c.id=${sql.placeholder("cursor")}::uuid AND (${review.createdAt},${review.id}) < (c.created_at,c.id)) END)`;
   const ordering = [asc(sql`CASE WHEN ${sql.placeholder("view")}='queue' THEN ${review.createdAt} END`), asc(sql`CASE WHEN ${sql.placeholder("view")}='queue' THEN ${review.id} END`), desc(sql`CASE WHEN ${sql.placeholder("view")}='history' THEN ${review.createdAt} END`), desc(sql`CASE WHEN ${sql.placeholder("view")}='history' THEN ${review.id} END`)];
   const join = and(eq(repo.organizationId, review.organizationId), eq(repo.id, review.repositoryId));

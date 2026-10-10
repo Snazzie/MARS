@@ -76,6 +76,7 @@ export interface PrReviewDeps extends PrReviewWebhookDeps {
   githubFetchForInstallation?(installationId: number): typeof fetch;
   installationBlocked?(installationId: number): boolean;
   generate?: typeof generatePrReview;
+  onUsageUpdated?(organizationId: string, id: string, usage: PipelineAnalysisUsage): void;
 }
 function safeError(error: unknown): string {
   const code = error instanceof Error ? error.message : "";
@@ -242,6 +243,7 @@ async function processPrReview(deps: PrReviewDeps, q: ReturnType<typeof queries>
         const pricing = row.providerSnapshot as ProviderSnapshot;
         const estimatedCostUsd = pricing.inputUsdPerMillionTokens === null || pricing.outputUsdPerMillionTokens === null ? null : (usage.inputTokens * pricing.inputUsdPerMillionTokens + usage.outputTokens * pricing.outputUsdPerMillionTokens) / 1_000_000;
         await q.usage.execute({ id: row.id, ...usage, estimatedCostUsd });
+        deps.onUsageUpdated?.(row.organizationId, row.id, usage);
       },
     });
     const parsed = PrReviewResult.safeParse(result);

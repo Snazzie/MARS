@@ -2,7 +2,7 @@ import { PrReviewResult, LlmProviderDefaultApiRoots, type LlmProviderModelLookup
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { SecretBox } from "./auth.ts";
-import { LMStudioClient, type BaseLoadModelOpts, type LLMLoadModelConfig, type ChatLike } from "@lmstudio/sdk";
+import { LMStudioClient, type BaseLoadModelOpts, type LLMLoadModelConfig, type ChatLike, type LLMPredictionOpts, type LLMPredictionFragment, type LLMPredictionStats } from "@lmstudio/sdk";
 import { fitPrReviewContext, type PrReviewContext } from "./pr-review-context.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit & { timeout?: number | false }) => Promise<Response>;
@@ -12,6 +12,7 @@ type StudioModel = {
   getContextLength(): Promise<number>;
   applyPromptTemplate(history: ChatLike): Promise<string>;
   countTokens(input: string): Promise<number>;
+  respond(history: ChatLike, options: LLMPredictionOpts): AsyncIterable<LLMPredictionFragment> & PromiseLike<{ content: string; nonReasoningContent: string; stats: LLMPredictionStats }>;
 };
 type StudioClient = {
   llm: { model(key: string, options: BaseLoadModelOpts<LLMLoadModelConfig>): Promise<StudioModel> };
@@ -151,6 +152,55 @@ function responseContent(kind: LlmProviderKind, payload: unknown): string {
   return (message as Record<string, string>).content;
 }
 
+async function readProviderStream(response: Response, kind: LlmProviderKind, startedAt: number, onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void>): Promise<string> {
+  if (!response.body) throw new Error("llm_invalid_response");
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let pending = "", content = "", bytes = 0, ended = false;
+  let anthropicUsage: Record<string, unknown> = {};
+  const consume = async (event: string) => {
+    const data = event.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
+    if (!data) return;
+    if (data === "[DONE]") { ended = true; return; }
+    let payload: Record<string, any>;
+    try { payload = JSON.parse(data); } catch { throw new Error("llm_invalid_response"); }
+    if (payload.error || payload.type === "error") throw new Error("llm_unavailable");
+    if (kind === "anthropic") {
+      if (payload.type === "message_start") anthropicUsage = { ...payload.message?.usage };
+      if (payload.type === "message_delta") anthropicUsage = { ...anthropicUsage, ...payload.usage };
+      if (payload.type === "content_block_delta" && payload.delta?.type === "text_delta") content += payload.delta.text;
+      if (payload.type === "message_stop") ended = true;
+      const usage = providerUsage(kind, { usage: anthropicUsage }, performance.now() - startedAt);
+      if ((payload.type === "message_start" || payload.type === "message_delta") && usage) await onUsage?.(usage);
+    } else {
+      const text = payload.choices?.[0]?.delta?.content;
+      if (typeof text === "string") content += text;
+      const usage = providerUsage(kind, payload, performance.now() - startedAt);
+      if (usage) await onUsage?.(usage);
+    }
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_RESPONSE_BYTES) throw new Error("llm_invalid_response");
+      pending = (pending + decoder.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+      let boundary: number;
+      while ((boundary = pending.indexOf("\n\n")) >= 0) {
+        await consume(pending.slice(0, boundary));
+        pending = pending.slice(boundary + 2);
+      }
+    }
+    pending += decoder.decode();
+    if (pending.trim()) await consume(pending);
+    if (!ended) throw new Error("llm_invalid_response");
+    return content;
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+}
+
 function parseResult(content: string): PipelineAnalysisResult {
   let text = content.trim();
   const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -207,6 +257,7 @@ async function ensureLmStudioModel(root: string, model: string, headers: Headers
       });
       const config = await instance.getLoadConfig();
       if (![1, "max"].includes(config.gpu?.ratio ?? "") || ![undefined, 0, "off"].includes(config.gpu?.numCpuExpertLayersRatio) || config.gpuStrictVramCap !== false || config.autoFit === true) throw new Error("llm_model_load_failed");
+      clearTimeout(timeout);
       await prepare?.(instance);
       return z.string().min(1).max(200).parse(instance.identifier);
     })()]);
@@ -238,20 +289,57 @@ async function requestProvider(input: {
   if (provider.kind === "anthropic" && !apiKey) throw new Error("llm_auth_failed");
   let context = sanitizeProviderText(input.context, apiKey);
   const endpoint = `${root}${provider.kind === "anthropic" ? "/messages" : "/chat/completions"}`;
-  const headers = new Headers({ "content-type": "application/json", accept: "application/json" });
+  const headers = new Headers({ "content-type": "application/json", accept: "text/event-stream, application/json" });
   let body: unknown;
   if (provider.kind === "anthropic") {
     headers.set("x-api-key", apiKey!);
     headers.set("anthropic-version", "2023-06-01");
-    body = { model: provider.model, max_tokens: 4096, system: input.systemPrompt, messages: [{ role: "user", content: context }] };
+    body = { model: provider.model, stream: true, max_tokens: 4096, system: input.systemPrompt, messages: [{ role: "user", content: context }] };
   } else {
     if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
-    const model = provider.kind === "lm-studio" ? await ensureLmStudioModel(root, provider.model, headers, fetcher, input.studioClientFactory, input.prepareContext ? async instance => {
-      context = await input.prepareContext!(instance, apiKey);
-    } : undefined) : provider.model;
+    if (provider.kind === "lm-studio") {
+      let content = "";
+      await ensureLmStudioModel(root, provider.model, headers, fetcher, input.studioClientFactory, async instance => {
+        if (input.prepareContext) context = await input.prepareContext(instance, apiKey);
+        const history: ChatLike = [{ role: "system", content: input.systemPrompt }, { role: "user", content: context }];
+        const inputTokens = await instance.countTokens(await instance.applyPromptTemplate(history));
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+        try {
+          await input.onRequest?.();
+          const startedAt = performance.now();
+          let outputTokens = 0, bytes = 0, lastPublished = startedAt;
+          await input.onUsage?.({ inputTokens, outputTokens, tokensPerSecond: null });
+          const prediction = instance.respond(history, {
+            signal: controller.signal, maxTokens: 4096,
+            ...(input.responseSchema ? { structured: { type: "json", jsonSchema: input.responseSchema } } : {}),
+          });
+          for await (const fragment of prediction) {
+            bytes += Buffer.byteLength(fragment.content);
+            if (bytes > MAX_RESPONSE_BYTES) { controller.abort(); throw new Error("llm_invalid_response"); }
+            outputTokens += fragment.tokensCount;
+            const now = performance.now();
+            if (now - lastPublished >= 250) {
+              await input.onUsage?.({ inputTokens, outputTokens, tokensPerSecond: outputTokens * 1000 / (now - startedAt) });
+              lastPublished = now;
+            }
+          }
+          const result = await prediction;
+          if (["failed", "modelUnloaded", "userStopped"].includes(result.stats.stopReason)) throw new Error("llm_unavailable");
+          const usage = providerUsage("openai-compatible", { usage: { prompt_tokens: result.stats.promptTokensCount ?? inputTokens, completion_tokens: result.stats.predictedTokensCount ?? outputTokens } }, performance.now() - startedAt);
+          if (usage && result.stats.tokensPerSecond !== undefined && Number.isFinite(result.stats.tokensPerSecond) && result.stats.tokensPerSecond >= 0) usage.tokensPerSecond = result.stats.tokensPerSecond;
+          await input.onUsage?.(usage);
+          content = result.nonReasoningContent;
+        } catch (error) {
+          if (controller.signal.aborted && !(error instanceof Error && error.message === "llm_invalid_response")) throw new Error("llm_timeout");
+          throw error;
+        } finally { clearTimeout(timeout); }
+      });
+      return content;
+    }
     body = {
-      model, max_tokens: 4096, messages: [{ role: "system", content: input.systemPrompt }, { role: "user", content: context }],
-      ...(provider.kind === "lm-studio" && input.responseSchema ? { response_format: { type: "json_schema", json_schema: { name: input.responseSchemaName ?? "pipeline_analysis", strict: true, schema: input.responseSchema } } } : {}),
+      model: provider.model, stream: true, stream_options: { include_usage: true }, max_tokens: 4096,
+      messages: [{ role: "system", content: input.systemPrompt }, { role: "user", content: context }],
     };
   }
   const controller = new AbortController();
@@ -262,6 +350,9 @@ async function requestProvider(input: {
     const startedAt = performance.now();
     const response = await fetcher(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal: controller.signal, timeout: false, redirect: "error" });
     if (!response.ok) throw new Error(errorCode(response.status));
+    if (response.headers.get("content-type")?.includes("text/event-stream")) {
+      return await readProviderStream(response, provider.kind, startedAt, input.onUsage);
+    }
     const raw = await readCappedResponse(response);
     const durationMs = performance.now() - startedAt;
     let payload: unknown;

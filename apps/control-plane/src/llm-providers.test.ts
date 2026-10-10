@@ -6,6 +6,14 @@ import type { LLMLoadModelConfig } from "@lmstudio/sdk";
 const context = { run: { workflow: "test", attempt: 1 }, failedJobs: [{ jobId: 42, steps: [{ stepNumber: 3, name: "assert", excerpt: "AssertionError: expected 2 but got 3" }] }] };
 const valid = { summary: "Assertion failed", failures: [{ jobId: 42, stepNumber: 3, explanation: "The expected value differs.", evidence: ["expected 2 but got 3"], suggestedFix: "Update the expected value." }] };
 
+function studioPrediction(content: string) {
+  return Object.assign(Promise.resolve({ content, nonReasoningContent: content, stats: { stopReason: "eosFound" as const, promptTokensCount: 100, predictedTokensCount: 10 } }), {
+    async *[Symbol.asyncIterator]() {
+      yield { content, tokensCount: 10, containsDrafted: false, reasoningType: "none" as const, isStructural: false };
+    },
+  });
+}
+
 test("validates API roots and rejects URL credentials, query, fragment, and non-HTTP schemes", () => {
   expect(validateProviderApiRoot("http://localhost:11434/v1/")).toBe("http://localhost:11434/v1");
   for (const value of ["file:///tmp", "https://user:pass@example.com/v1", "https://example.com/v1?x=1", "https://example.com/v1#frag"]) expect(() => validateProviderApiRoot(value)).toThrow();
@@ -166,7 +174,7 @@ test("LM Studio cold-loads once, reuses its instance, and reloads after eviction
   const studioClientFactory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
     llm: { model: async (_key, options) => {
       if (!loaded) { loads++; loaded = true; config = options.config ?? {}; }
-      return { identifier: "instance-1", getLoadConfig: async () => config, getContextLength: async () => 16384, applyPromptTemplate: async history => JSON.stringify(history), countTokens: async text => text.length };
+      return { identifier: "instance-1", getLoadConfig: async () => config, getContextLength: async () => 16384, applyPromptTemplate: async history => JSON.stringify(history), countTokens: async text => text.length, respond: () => studioPrediction(JSON.stringify(valid)) };
     } },
     async [Symbol.asyncDispose]() {},
   });
@@ -178,11 +186,6 @@ test("LM Studio cold-loads once, reuses its instance, and reloads after eviction
       if (path === "/proxy/api/v1/models") return Response.json({ models: [
         { type: "llm", key: "downloaded-model", loaded_instances: loaded ? [{ id: "instance-1" }] : [] },
       ] });
-      if (path === "/proxy/v1/chat/completions") {
-        const body = await request.json();
-        if (!loaded || body.model !== "instance-1") return new Response(null, { status: 400 });
-        return Response.json({ choices: [{ message: { content: JSON.stringify(valid) } }] });
-      }
       return new Response(null, { status: 404 });
     },
   });
@@ -223,7 +226,7 @@ test.each(["partial", "cpu-experts", "vram-cap", "engine-error"])("LM Studio rej
   const studioClientFactory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
     llm: { model: async () => {
       if (mode === "engine-error") throw new Error("private engine failure");
-      return { identifier: "model", getLoadConfig: async () => ({ gpu: { ratio: mode === "partial" ? 0.5 : 1, numCpuExpertLayersRatio: mode === "cpu-experts" ? 0.5 : "off" }, gpuStrictVramCap: mode === "vram-cap" }), getContextLength: async () => 16384, applyPromptTemplate: async history => JSON.stringify(history), countTokens: async text => text.length };
+      return { identifier: "model", getLoadConfig: async () => ({ gpu: { ratio: mode === "partial" ? 0.5 : 1, numCpuExpertLayersRatio: mode === "cpu-experts" ? 0.5 : "off" }, gpuStrictVramCap: mode === "vram-cap" }), getContextLength: async () => 16384, applyPromptTemplate: async history => JSON.stringify(history), countTokens: async text => text.length, respond: () => { inferenceCalls++; return studioPrediction(JSON.stringify(valid)); } };
     } },
     async [Symbol.asyncDispose]() {},
   });
@@ -294,6 +297,16 @@ test.each([8192, 4100])("PR reviews respect the loaded %p-token context and pres
       getContextLength: async () => contextLength,
       applyPromptTemplate: async chat => JSON.stringify(chat),
       countTokens: async text => text.length,
+      respond: (history, options) => {
+        submitted = true;
+        if (JSON.stringify(history).length + Number(options.maxTokens) > contextLength) throw new Error("oversized prompt submitted");
+        const context = captured!;
+        expect(context.files.map(file => file.path)).toEqual(["file1.ts"]);
+        expect(context.files[0]!.headSource).toBe(source.files[0]!.headSource);
+        expect(context.rules).toEqual(source.rules);
+        expect(context.coverage).toMatchObject({ complete: false, reviewableFiles: 1, omittedFiles: 1 });
+        return studioPrediction('{"findings":[]}');
+      },
     }) },
     async [Symbol.asyncDispose]() {},
   });
@@ -301,18 +314,7 @@ test.each([8192, 4100])("PR reviews respect the loaded %p-token context and pres
     provider: { name: "Studio", kind: "lm-studio", baseUrl: "http://studio.test/v1", model: "model" },
     context: source, studioClientFactory,
     onContext: context => { captured = context as typeof source; },
-  }, async (url, init) => {
-    if (!String(url).endsWith("/chat/completions")) return Response.json({ models: [{ type: "llm", key: "model", loaded_instances: [{ id: "model" }] }] });
-    submitted = true;
-    const body = JSON.parse(String(init!.body));
-    if (JSON.stringify(body.messages).length + body.max_tokens > contextLength) throw new Error("oversized prompt submitted");
-    const context = JSON.parse(body.messages[1].content);
-    expect(context.files.map((file: { path: string }) => file.path)).toEqual(["file1.ts"]);
-    expect(context.files[0].headSource).toBe(source.files[0]!.headSource);
-    expect(context.rules).toEqual(source.rules);
-    expect(context.coverage).toMatchObject({ complete: false, reviewableFiles: 1, omittedFiles: 1 });
-    return Response.json({ choices: [{ message: { content: '{"findings":[]}' } }] });
-  });
+  }, async () => Response.json({ models: [{ type: "llm", key: "model", loaded_instances: [{ id: "model" }] }] }));
   if (contextLength === 4100) {
     await expect(run).rejects.toThrow("pr_review_context_too_large");
     expect(submitted).toBe(false);
@@ -323,4 +325,57 @@ test.each([8192, 4100])("PR reviews respect the loaded %p-token context and pres
     expect(source.files).toHaveLength(2);
     expect(source.pullRequest.description).not.toBeNull();
   }
+});
+
+test("LM Studio publishes live input and output usage before generation finishes, then reconciles totals", async () => {
+  const release = Promise.withResolvers<void>(), live = Promise.withResolvers<void>();
+  let clock = 0;
+  const timer = spyOn(performance, "now").mockImplementation(() => clock);
+  const usages: Array<{ inputTokens: number; outputTokens: number; tokensPerSecond: number | null } | null> = [];
+  const content = JSON.stringify(valid);
+  let completed = false;
+  const factory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
+    llm: { model: async () => ({
+      identifier: "model", getLoadConfig: async () => ({ gpu: { ratio: 1, numCpuExpertLayersRatio: "off" }, gpuStrictVramCap: false, autoFit: false }),
+      getContextLength: async () => 8192, applyPromptTemplate: async () => "rendered prompt", countTokens: async () => 12,
+      respond: () => Object.assign(release.promise.then(() => ({ content, nonReasoningContent: content, stats: { stopReason: "eosFound" as const, promptTokensCount: 13, predictedTokensCount: 10, tokensPerSecond: 8 } })), {
+        async *[Symbol.asyncIterator]() {
+          clock = 1000;
+          yield { content: content.slice(0, 10), tokensCount: 4, containsDrafted: false, reasoningType: "none" as const, isStructural: false };
+          await release.promise;
+          clock = 2000;
+          yield { content: content.slice(10), tokensCount: 5, containsDrafted: false, reasoningType: "none" as const, isStructural: false };
+        },
+      }),
+    }) }, async [Symbol.asyncDispose]() {},
+  });
+  try {
+    const run = generatePipelineAnalysis({
+      provider: { name: "Studio", kind: "lm-studio", baseUrl: "http://studio.test/v1", model: "model" },
+      context, studioClientFactory: factory,
+      onUsage: usage => { usages.push(usage); if (usage?.outputTokens === 4) live.resolve(); },
+    }, async () => Response.json({ models: [{ type: "llm", key: "model", loaded_instances: [{ id: "model" }] }] })).then(result => { completed = true; return result; });
+    await live.promise;
+    expect(completed).toBe(false);
+    expect(usages).toEqual([{ inputTokens: 12, outputTokens: 0, tokensPerSecond: null }, { inputTokens: 12, outputTokens: 4, tokensPerSecond: 4 }]);
+    release.resolve();
+    expect(await run).toEqual(valid);
+    expect(usages.at(-1)).toEqual({ inputTokens: 13, outputTokens: 10, tokensPerSecond: 8 });
+  } finally { release.resolve(); timer.mockRestore(); }
+});
+
+test("Anthropic streaming merges cached input usage and rejects truncated output", async () => {
+  const usages: unknown[] = [];
+  const events = [
+    { type: "message_start", message: { usage: { input_tokens: 12, cache_read_input_tokens: 3, output_tokens: 0 } } },
+    { type: "content_block_delta", delta: { type: "text_delta", text: JSON.stringify(valid) } },
+    { type: "message_delta", usage: { output_tokens: 7 } },
+    { type: "message_stop" },
+  ];
+  const provider: LlmProviderConfig = { name: "Cloud", kind: "anthropic", baseUrl: "http://cloud.test/v1", model: "model", encryptedApiKey: "key" };
+  const fetcher = async () => new Response(events.map(event => `data: ${JSON.stringify(event)}\r\n\r\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+  expect(await generatePipelineAnalysis({ provider, context, onUsage: usage => { usages.push(usage); } }, fetcher)).toEqual(valid);
+  expect(usages).toMatchObject([{ inputTokens: 15, outputTokens: 0 }, { inputTokens: 15, outputTokens: 7 }]);
+  events.pop();
+  await expect(generatePipelineAnalysis({ provider, context }, fetcher)).rejects.toThrow("llm_invalid_response");
 });
