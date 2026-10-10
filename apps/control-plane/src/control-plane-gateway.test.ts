@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import { createControlPlaneGateway, enqueueWorkerMessage, scheduleWorkerHeartbeatDeadline, scheduleWorkerPing, sendWorkerAuthenticationFrames, sendWorkerStatus } from "./control-plane-gateway.ts";
 import { preparedTestDatabase } from "../../../packages/db/src/prepared-test-fixture.ts";
+import { sign } from "node:crypto";
+import { createWorkerKey } from "./workers.ts";
+import { ensureDefaultPools } from "./default-pools.ts";
 
 test("schedules worker heartbeat pings without sending immediately", () => {
   let sendCount = 0;
@@ -126,5 +129,65 @@ test("records the rejected worker frame and disconnect context without logging f
   } finally {
     console.error = originalError;
     console.warn = originalWarn;
+  }
+});
+
+test("restores a disabled default pool from fresh doctor evidence before dispatch", async () => {
+  const workerId = crypto.randomUUID();
+  const key = createWorkerKey();
+  const challenge = Buffer.from("doctor-pool-recovery");
+  const driver = "windows-hyperv-container";
+  const imageDigest = `sha256:${"a".repeat(64)}`;
+  let doctor: unknown = null;
+  const pools = new Map<string, Record<string, unknown>>();
+  const db = preparedTestDatabase((name, values) => {
+    if (name === "gateway_authenticate") return [{ name: "worker", publicKey: key.publicKey, admissionState: "adopted" }];
+    if (name === "worker_request_connect_lock") return [{ desiredConfiguration: null }];
+    if (name === "gateway_doctor") doctor = JSON.parse(String(values.doctor));
+    if (name === "default_pools_workers") return doctor ? [{
+      platform: "windows-x64", guestPlatforms: ["windows-x64"], doctor,
+      desiredConfiguration: { selectedDriver: driver },
+      limits: { maxVcpuPerPod: 16, maxMemoryBytesPerPod: 32 * 1024 ** 3, maxStorageBytesPerPod: 50 * 1024 ** 3, maxConcurrentPods: 10 },
+    }] : [];
+    if (name === "default_pools_find" || name === "default_pools_find_alternate") {
+      const pool = pools.get(String(values.name));
+      return pool ? [pool] : [];
+    }
+    if (name === "default_pools_insert") pools.set(String(values.name), { ...values, id: values.name });
+    if (name === "default_pools_update") Object.assign(pools.get(String(values.id))!, { enabled: values.enabled });
+    return [];
+  });
+  await ensureDefaultPools(db, {});
+  expect(pools.get("default-windows-x64")?.enabled).toBe(false);
+  const eligibilityAtDispatch: unknown[] = [];
+  const gateway = createControlPlaneGateway({
+    db, httpFetch: async () => new Response(), current: async () => null, requestSource: () => "test",
+    dispatcher: { register() {}, unregister() {}, async replayConnected() {} } as never,
+    refreshDefaultPools: () => ensureDefaultPools(db, {}),
+    triggerReconciliation: async () => { eligibilityAtDispatch.push(pools.get("default-windows-x64")?.enabled); },
+    requestId: () => crypto.randomUUID(),
+  });
+  const socket = {
+    data: { actor: "worker", workerId, connectionEpoch: 1, authenticated: false, challenge },
+    send() {}, close() { throw new Error("worker unexpectedly disconnected"); },
+  } as never;
+  try {
+    await gateway.websocket.message?.(socket, JSON.stringify({
+      type: "authenticate", workerId, encryptionPublicKey: "test-key",
+      signature: sign(null, Buffer.from(`${challenge.toString("base64url")}\n${workerId}\ntest-key`), key.privateKey).toString("base64url"),
+    }));
+    for (const ready of [true, false, true]) {
+      await gateway.websocket.message?.(socket, JSON.stringify({
+        type: "doctor", workerId, payload: {
+          releaseVersion: "0.0.0", contractVersion: "0.4.0", hostPlatform: "windows-x64",
+          doctor: { capabilities: [{ driver, guestPlatform: "windows-x64", imageDigest, ready, remediation: null }] },
+          capacity: { actualVcpu: 32, freeVcpu: 32, actualMemoryBytes: 64 * 1024 ** 3, freeMemoryBytes: 64 * 1024 ** 3, actualStorageBytes: 100 * 1024 ** 3, freeStorageBytes: 100 * 1024 ** 3 },
+        },
+      }));
+    }
+    expect(eligibilityAtDispatch).toEqual([true, false, true]);
+    expect(pools.get("default-windows-x64")).toMatchObject({ enabled: true, driver });
+  } finally {
+    gateway.websocket.close?.(socket, 1000, "test complete");
   }
 });

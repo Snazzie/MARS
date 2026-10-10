@@ -248,13 +248,14 @@ export function createControlPlaneGateway(options: GatewayOptions) {
           await queries(options.db).armMigrationDrain.execute({ workerId: ws.data.workerId, guestPlatforms: JSON.stringify(["linux-arm64"]) });
         }
         await queries(options.db).doctor.execute({ workerId: ws.data.workerId, doctor: JSON.stringify(doctorPayload), releaseVersion: doctorPayload.releaseVersion, contractVersion: doctorPayload.contractVersion });
-        void options.triggerReconciliation();
         if (doctorPayload.doctor.activeLeases && doctorPayload.doctor.inventoryObservedAt) {
           await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases, doctorPayload.doctor.inventoryObservedAt);
         }
         if (await recoverWorkerConfigurationFromDoctor(options.db, ws.data.workerId, doctorPayload)) {
           await options.dispatcher.replayConnected(ws.data.workerId);
         }
+        await options.refreshDefaultPools();
+        void options.triggerReconciliation();
         if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
         ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));
       } else if (frame.type === "pong" && ws.data.authenticated && workerSockets.get(ws.data.workerId) === ws && workerConnectionEpochs.get(ws.data.workerId) === ws.data.connectionEpoch) {

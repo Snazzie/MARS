@@ -72,6 +72,12 @@ the selected worker's matching capability, not the pool's stored image digest.
 Workers still verify their own immutable images; adoption, configuration,
 fresh heartbeat/doctor evidence, pickup, and capacity checks remain required.
 
+Default pools refresh their enablement and capacity after each validated worker
+doctor report, once inventory and configuration recovery have been processed and
+before dispatch reconciliation is triggered. A pool disabled while workers were
+unavailable at control-plane startup therefore recovers when fresh, configured
+worker evidence arrives, without requiring another configuration acknowledgement.
+
 ## How routing works
 
 1. Mars parses the complete requested label set and rejects blank, malformed, or
