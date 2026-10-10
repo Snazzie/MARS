@@ -20,6 +20,7 @@ import { Route as AuthenticatedSettingsRouteImport } from './file-routes/_authen
 import { Route as AuthenticatedWorkersRouteImport } from './file-routes/_authenticated/workers'
 import { Route as AuthenticatedRunsIndexRouteImport } from './file-routes/_authenticated/runs/index'
 import { Route as AuthenticatedRunsRunIdRouteImport } from './file-routes/_authenticated/runs/$runId'
+import { Route as AuthenticatedRunsAiRouteImport } from './file-routes/_authenticated/runs.ai'
 import { Route as AuthenticatedRunsTimingRouteImport } from './file-routes/_authenticated/runs.timing'
 import { Route as AuthenticatedSettingsAiRouteImport } from './file-routes/_authenticated/settings_.ai'
 import { Route as AuthenticatedWorkersIndexRouteImport } from './file-routes/_authenticated/workers/index'
@@ -80,6 +81,11 @@ const AuthenticatedRunsRunIdRoute = AuthenticatedRunsRunIdRouteImport.update({
   path: '/$runId',
   getParentRoute: () => AuthenticatedRunsRoute,
 } as any)
+const AuthenticatedRunsAiRoute = AuthenticatedRunsAiRouteImport.update({
+  id: '/ai',
+  path: '/ai',
+  getParentRoute: () => AuthenticatedRunsRoute,
+} as any)
 const AuthenticatedRunsTimingRoute = AuthenticatedRunsTimingRouteImport.update({
   id: '/timing',
   path: '/timing',
@@ -113,6 +119,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AuthenticatedSettingsRoute
   '/workers': typeof AuthenticatedWorkersRouteWithChildren
   '/runs/$runId': typeof AuthenticatedRunsRunIdRoute
+  '/runs/ai': typeof AuthenticatedRunsAiRoute
   '/runs/timing': typeof AuthenticatedRunsTimingRoute
   '/settings/ai': typeof AuthenticatedSettingsAiRoute
   '/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
@@ -127,6 +134,7 @@ export interface FileRoutesByTo {
   '/settings': typeof AuthenticatedSettingsRoute
   '/': typeof AuthenticatedIndexRoute
   '/runs/$runId': typeof AuthenticatedRunsRunIdRoute
+  '/runs/ai': typeof AuthenticatedRunsAiRoute
   '/runs/timing': typeof AuthenticatedRunsTimingRoute
   '/settings/ai': typeof AuthenticatedSettingsAiRoute
   '/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
@@ -145,6 +153,7 @@ export interface FileRoutesById {
   '/_authenticated/workers': typeof AuthenticatedWorkersRouteWithChildren
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/runs/$runId': typeof AuthenticatedRunsRunIdRoute
+  '/_authenticated/runs/ai': typeof AuthenticatedRunsAiRoute
   '/_authenticated/runs/timing': typeof AuthenticatedRunsTimingRoute
   '/_authenticated/settings_/ai': typeof AuthenticatedSettingsAiRoute
   '/_authenticated/workers/$workerId': typeof AuthenticatedWorkersWorkerIdRoute
@@ -163,6 +172,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/workers'
     | '/runs/$runId'
+    | '/runs/ai'
     | '/runs/timing'
     | '/settings/ai'
     | '/workers/$workerId'
@@ -177,6 +187,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/'
     | '/runs/$runId'
+    | '/runs/ai'
     | '/runs/timing'
     | '/settings/ai'
     | '/workers/$workerId'
@@ -194,6 +205,7 @@ export interface FileRouteTypes {
     | '/_authenticated/workers'
     | '/_authenticated/'
     | '/_authenticated/runs/$runId'
+    | '/_authenticated/runs/ai'
     | '/_authenticated/runs/timing'
     | '/_authenticated/settings_/ai'
     | '/_authenticated/workers/$workerId'
@@ -285,6 +297,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRunsRunIdRouteImport
       parentRoute: typeof AuthenticatedRunsRoute
     }
+    '/_authenticated/runs/ai': {
+      id: '/_authenticated/runs/ai'
+      path: '/ai'
+      fullPath: '/runs/ai'
+      preLoaderRoute: typeof AuthenticatedRunsAiRouteImport
+      parentRoute: typeof AuthenticatedRunsRoute
+    }
     '/_authenticated/runs/timing': {
       id: '/_authenticated/runs/timing'
       path: '/timing'
@@ -318,12 +337,14 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedRunsRouteChildren {
   AuthenticatedRunsRunIdRoute: typeof AuthenticatedRunsRunIdRoute
+  AuthenticatedRunsAiRoute: typeof AuthenticatedRunsAiRoute
   AuthenticatedRunsTimingRoute: typeof AuthenticatedRunsTimingRoute
   AuthenticatedRunsIndexRoute: typeof AuthenticatedRunsIndexRoute
 }
 
 const AuthenticatedRunsRouteChildren: AuthenticatedRunsRouteChildren = {
   AuthenticatedRunsRunIdRoute: AuthenticatedRunsRunIdRoute,
+  AuthenticatedRunsAiRoute: AuthenticatedRunsAiRoute,
   AuthenticatedRunsTimingRoute: AuthenticatedRunsTimingRoute,
   AuthenticatedRunsIndexRoute: AuthenticatedRunsIndexRoute,
 }

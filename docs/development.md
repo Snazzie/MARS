@@ -78,13 +78,20 @@ Dashboard recovery and navigation:
 - Runs search, queued-time ranges, and runner ownership are filtered on the server
   before pagination, including All workspaces. Clear filters resets all three controls.
   Charts represent the loaded matching runs, not the complete history.
-- Runs and Overview show an AI run queue for pending and running failure analyses,
-  oldest first, with captured run attempt, repository, provider/model, and run links.
-  **Recent runs** lists completed, failed, and skipped analyses newest-enqueued first,
-  retaining each attempt's metrics after it leaves the queue. Both views follow workspace
-  scope (All workspaces includes memberships only), independently of run-history filters
-  and reporting windows. They refresh every five seconds while visible and paginate in
-  a bounded scrolling panel.
+- **Runs → AI** (`/runs/ai`) is a separate file-routed page, defaulting to **Recent runs**
+  for completed, failed, and skipped analyses, newest-enqueued first. **Queue** shows
+  pending/running analyses oldest first. Both retain captured run attempt, repository,
+  provider/model, metrics, and run links. They follow workspace scope (All workspaces
+  includes memberships only), independently of Jobs filters and reporting windows.
+  They refresh every five seconds while visible and paginate in the page's normal
+  scroll flow. Overview and **Runs → Jobs** (`/runs`) no longer embed AI lists.
+- Desktop and mobile sidebar navigation are generated from the TanStack file routes'
+  `staticData.navigation` metadata. Labels, ordering, section (`primary` or `settings`),
+  admin-only visibility, and contextual help live with each route. Nesting follows
+  the generated route tree; the Runs index supplies **Jobs** and its AI child supplies
+  **AI**. Only routes with navigation metadata appear; detail and timing routes remain
+  reachable without becoming menu entries. The existing Vite router plugin generates
+  `routeTree.gen.ts`; do not hand-edit that file.
 - Each AI run and its current-attempt failure-analysis detail show total/input/output
   tokens, estimated USD spend, time to start, and time taken. Usage comes from the
   provider response; estimates use the per-analysis pricing snapshot, not today's

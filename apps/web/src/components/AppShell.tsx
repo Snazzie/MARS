@@ -1,47 +1,47 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, Outlet, useRouter, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { getHealth, getMe, getOrganizations } from "../api.ts";
 import { useOrganization } from "../organization.ts";
 import { QueryState } from "./StateView.tsx";
 import { ContextHelp } from "./ContextHelp.tsx";
 import { useDashboardInvalidations } from "../useDashboardInvalidations.ts";
+import { buildRouteNavigation, type NavigationHelp, type NavigationItem } from "../navigation.ts";
 
-const navigationLinks = [
-  ["/", "Overview", "01"],
-  ["/runs", "Runs", "02"],
-  ["/repositories", "Repositories", "03"],
-  ["/workers", "Workers", "04"],
-  ["/pools", "Pools", "05"],
-] as const;
-const settingsLinks = [["/settings", "General", "01"], ["/settings/ai", "AI", "02"]] as const;
-const links = [...navigationLinks, ...settingsLinks] as const;
-const helpByRoute: Record<(typeof links)[number][0], { label: string; text: string }> = {
-  "/": { label: "About overview health", text: "What: workload outcomes and control-plane freshness for the selected workspace. How: change the time window to inspect trends. Fix: open Workers when capacity or runtime health is degraded, then Runs for individual failures." },
-  "/runs": { label: "About run history", text: "What: GitHub workflow jobs observed by Mars. How: filter by repository, branch, actor, status, or conclusion and open a run for jobs, stages, and logs. Fix: use the linked GitHub run when cancellation or rerun is required." },
-  "/repositories": { label: "About repository setup", text: "What: repositories available through the selected GitHub App installation. How: preview workflow label changes before opening a pull request. Fix: manage the installation when a repository is missing or access is stale." },
-  "/workers": { label: "About worker readiness", text: "What: enrollment, connection, configuration, doctor checks, and free capacity. How: adopt a pending host, configure its supported runtime, then wait for the applied revision. Fix: follow the reported remediation and drain before removal." },
-  "/pools": { label: "About shared pools", text: "What: global routing labels backed by compatible ready workers. How: keep labels canonical and only enable a pool after coverage is ready. Fix: disable the pool and wait for active leases before editing or deleting it." },
-  "/settings": { label: "About deployment settings", text: "What: appearance, signed-in access, GitHub connections, and API quota. How: select a workspace before managing its GitHub installation. Fix: retry failed connection checks or manage repository access in GitHub." },
-  "/settings/ai": { label: "About AI settings", text: "Connect a local or cloud model provider, then opt repositories into failure analysis. Failed log excerpts are sent to the selected endpoint and advisory feedback is posted by the installed MARS App. Only global administrators can change this configuration." },
-};
+function NavigationLinks({ items, current, activeRouteIds, nested = false }: { items: NavigationItem[]; current: NavigationItem | undefined; activeRouteIds: ReadonlySet<string>; nested?: boolean }) {
+  return items.map((item, index) => {
+    const selected = current?.routeId === item.routeId;
+    return <div key={item.routeId}>
+      <Link to={item.to} activeOptions={{ exact: true }} className={`nav-link${nested ? " nav-sublink" : ""}${activeRouteIds.has(item.routeId) ? " is-active" : ""}`} aria-current={selected ? "page" : undefined}>
+        {!nested && <span className="nav-number">{String(index + 1).padStart(2, "0")}</span>}<span>{item.label}</span>
+      </Link>
+      {item.children.length > 0 && <div className="nav-subitems" role="group" aria-label={`${item.label} pages`}><NavigationLinks items={item.children} current={current} activeRouteIds={activeRouteIds} nested /></div>}
+    </div>;
+  });
+}
+
 export function AppShell() {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const mobileNavigationRef = useRef<HTMLElement>(null);
   const location = useRouterState({ select: (state) => state.location.pathname });
+  const router = useRouter();
+  const matches = useRouterState({ select: (state) => state.matches });
   const health = useQuery({ queryKey: ["health"], queryFn: getHealth, refetchInterval: (query) => query.state.error ? 10_000 : 5_000, refetchIntervalInBackground: false });
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations, enabled: !me.isLoading && !me.error });
   const { organizationId, setOrganizationId } = useOrganization(organizations.data);
   useDashboardInvalidations(organizationId);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const inSettings = location === "/settings" || location.startsWith("/settings/");
-  const contextLinks = inSettings ? settingsLinks.filter(([to]) => to !== "/settings/ai" || me.data?.isGlobalAdmin) : navigationLinks;
+  const inSettings = matches.some(match => router.routesById[match.routeId]?.options.staticData?.navigation?.section === "settings");
+  const navigation = useMemo(() => buildRouteNavigation(Object.values(router.routesById), inSettings ? "settings" : "primary", Boolean(me.data?.isGlobalAdmin)), [router, inSettings, me.data?.isGlobalAdmin]);
   const state = me.isLoading || organizations.isLoading || me.error || organizations.error
     ? <QueryState error={me.error ?? organizations.error} isLoading={me.isLoading || organizations.isLoading} retry={() => { void me.refetch(); void organizations.refetch(); }} operationLabel="workspace data" />
     : null;
-  const currentLink = links.find(([to]) => to === location) ?? [...links].reverse().find(([to]) => location.startsWith(`${to}/`)) ?? links[0];
-  const currentHelp = helpByRoute[currentLink[0]];
+  const matchedNavigation = matches.reduce<NavigationItem | undefined>((item, match) => navigation.byRouteId.get(match.routeId) ?? item, undefined);
+  const currentNavigation = matchedNavigation?.children.find(child => child.to === matchedNavigation.to) ?? matchedNavigation;
+  const activeRouteIds = new Set(matches.map(match => match.routeId));
+  if (currentNavigation) activeRouteIds.add(currentNavigation.routeId);
+  const currentHelp = matches.reduce<NavigationHelp | undefined>((help, match) => router.routesById[match.routeId]?.options.staticData?.navigation?.help ?? help, undefined) ?? navigation.items[0]?.help;
   useEffect(() => { setMobileMenuOpen(false); }, [location]);
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -56,7 +56,7 @@ export function AppShell() {
 
   return (
     <div className="console-frame text-text">
-      <ContextHelp label={currentHelp.label}>{currentHelp.text}</ContextHelp>
+      {currentHelp && <ContextHelp label={currentHelp.label}>{currentHelp.text}</ContextHelp>}
       <aside className="rail">
         <div className="brand-lockup"><img className="brand-mark" src="/mars-icon.svg" alt="" /><span>MARS</span></div>
         <p className="rail-caption">{inSettings ? "Deployment settings" : "Runner operations / 01"}</p>
@@ -68,11 +68,7 @@ export function AppShell() {
         </label>
           <nav aria-label={inSettings ? "Settings navigation" : "Primary navigation"}>
             <p className="nav-label">{inSettings ? "Settings" : "Navigate"}</p>
-            {contextLinks.map(([to, label, number]) => (
-              <Link key={to} to={to} activeOptions={{ exact: to === "/settings" }} className="nav-link" activeProps={{ className: "nav-link is-active" }}>
-                <span className="nav-number">{number}</span><span>{label}</span>
-              </Link>
-            ))}
+            <NavigationLinks items={navigation.items} current={currentNavigation} activeRouteIds={activeRouteIds} />
           </nav>
           <div className="rail-settings">{inSettings ? <Link to="/" className="nav-link"><span>Back to dashboard</span></Link> : <Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link>}</div>
         <div className="rail-footer" role="status" aria-live="polite"><span className={`online-dot ${health.data ? "" : "is-offline"}`} />Control plane <strong>{health.isLoading ? "checking" : health.data ? "connected" : "unreachable"}</strong>{health.data?.discovery.stale && <small> Discovery stale</small>}</div>
@@ -86,7 +82,7 @@ export function AppShell() {
             </button>
           </div>
           <div className="mobile-header-context">
-            <span>{currentLink[1]}</span>
+            <span>{currentNavigation?.label ?? navigation.items[0]?.label}</span>
             <label className="mobile-org-picker">Workspace
               <select aria-label="Select workspace" value={organizationId} onChange={(event) => setOrganizationId(event.target.value)}>
                 <option value="all">All workspaces</option>
@@ -95,7 +91,7 @@ export function AppShell() {
             </label>
           </div>
           {mobileMenuOpen && <nav ref={mobileNavigationRef} id="mobile-navigation" className="mobile-navigation" aria-label="Mobile navigation">
-              {contextLinks.map(([to, label, navNumber]) => <Link key={to} to={to} activeOptions={{ exact: to === "/settings" }} className="nav-link" activeProps={{ className: "nav-link is-active" }}><span className="nav-number">{navNumber}</span><span>{label}</span></Link>)}
+              <NavigationLinks items={navigation.items} current={currentNavigation} activeRouteIds={activeRouteIds} />
               <div className="mobile-settings-nav">{inSettings ? <Link to="/" className="nav-link"><span>Back to dashboard</span></Link> : <Link to="/settings" className="nav-link" activeProps={{ className: "nav-link is-active" }}><span>Settings</span></Link>}</div>
           </nav>}
         </header>
