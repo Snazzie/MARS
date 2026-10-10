@@ -13,6 +13,8 @@ export type RunTransition = { status: RunSummary["status"]; conclusion: RunSumma
 const aiTokenUsageQueries = defineQueries(db => ({
   rows: db.select({
     calledAt: schema.pipelineFailureAnalyses.providerCalledAt,
+    model: schema.pipelineFailureAnalyses.model,
+    providerKind: schema.pipelineFailureAnalyses.providerKind,
     inputTokens: schema.pipelineFailureAnalyses.inputTokens,
     outputTokens: schema.pipelineFailureAnalyses.outputTokens,
     inputUsdPerMillionTokens: schema.pipelineFailureAnalyses.inputUsdPerMillionTokens,
@@ -33,6 +35,8 @@ export async function getAiTokenUsage(db: DashboardDb, now = new Date()): Promis
   ]);
   const prUsageRows: PipelineFailureAnalysisUsageRow[] = (prRows ?? []).map(row => ({
     calledAt: row.calledAt,
+    model: row.model,
+    providerKind: row.providerKind,
     inputTokens: row.inputTokens,
     outputTokens: row.outputTokens,
     inputUsdPerMillionTokens: null,
@@ -45,6 +49,8 @@ export async function getAiTokenUsage(db: DashboardDb, now = new Date()): Promis
 const prReviewUsageQueries = defineQueries(db => ({
   rows: db.select({
     calledAt: schema.prReviews.providerCalledAt,
+    model: sql<string | null>`${schema.prReviews.providerSnapshot}->>'model'`,
+    providerKind: sql<string | null>`${schema.prReviews.providerSnapshot}->>'kind'`,
     inputTokens: schema.prReviews.inputTokens,
     outputTokens: schema.prReviews.outputTokens,
     estimatedCostUsd: schema.prReviews.estimatedCostUsd,

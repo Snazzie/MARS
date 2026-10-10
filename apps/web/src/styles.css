@@ -1516,11 +1516,16 @@ a:active {
 .ai-repository-table thead th{color:var(--ui-text-muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
 .ai-repository-table tbody th{font-weight:500;overflow-wrap:anywhere}
 .ai-repository-table tbody tr:last-child th,.ai-repository-table tbody tr:last-child td{border-bottom:0}
-.ai-token-usage-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:16px;margin:0}
-.ai-token-usage-totals>div{padding:18px;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius)}
-.ai-token-usage-totals dt{font-size:.8rem;color:var(--ui-text-muted)}
-.ai-token-usage-totals dd{font-size:1.5rem;margin:8px 0 0}
-.overview-ai-usage{margin:16px 0;padding:20px;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius)}
+.ai-token-usage-summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 24px;font-size:.85rem}
+.ai-token-usage-models{overflow-x:auto}
+.ai-token-usage-models .ai-repository-table th,.ai-token-usage-models .ai-repository-table td{padding:6px 10px;font-size:.8rem}
+.ai-token-usage-models .ai-repository-table td{white-space:nowrap;text-align:right}
+.ai-token-usage-chart{min-height:160px}
+.overview-ai-usage{margin:12px 0;padding:12px 16px;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius);gap:8px}
+.overview-ai-usage .panel-heading{margin-bottom:0}
+.overview-ai-usage .eyebrow{margin-bottom:4px}
+.overview-ai-usage .form-help{margin-top:2px;font-size:.75rem}
+.overview-ai-usage .chart-note{margin:4px 0;font-size:.75rem}
 .overview-ai-usage h2{font-size:1rem}
 .ai-provider-select{max-width:420px}
 .ai-consent{color:var(--ui-text-muted);max-width:760px}

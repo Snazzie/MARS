@@ -2,6 +2,8 @@ import type { AiTokenUsage } from "@mars/contracts";
 import type { PipelineAnalysisMetrics } from "@mars/contracts";
 
 export interface PipelineFailureAnalysisUsageRow {
+  model?: string | null;
+  providerKind?: string | null;
   calledAt: string | Date | null;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -21,6 +23,7 @@ function reportedCount(value: number | null): number | null {
 }
 
 export function estimateAiRequestCost(row: PipelineFailureAnalysisUsageRow): number | null {
+  if (row.providerKind === "lm-studio") return 0;
   if (row.estimatedCostUsd !== undefined) return row.estimatedCostUsd !== null && Number.isFinite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
   const inputPrice = row.inputUsdPerMillionTokens, outputPrice = row.outputUsdPerMillionTokens;
   if (inputPrice === null || outputPrice === null || !Number.isFinite(inputPrice) || !Number.isFinite(outputPrice) || inputPrice < 0 || outputPrice < 0) return null;
@@ -56,7 +59,7 @@ export function getPipelineAnalysisMetrics(row: PipelineAnalysisMetricsRow, now 
   };
 }
 
-export function aggregateAiTokenUsage(rows: readonly PipelineFailureAnalysisUsageRow[], now = new Date()): AiTokenUsage {
+function aggregateUsageTotals(rows: readonly PipelineFailureAnalysisUsageRow[], now: Date): Omit<AiTokenUsage, "models"> {
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const firstDay = new Date(today);
   firstDay.setUTCDate(firstDay.getUTCDate() - 29);
@@ -106,5 +109,28 @@ export function aggregateAiTokenUsage(rows: readonly PipelineFailureAnalysisUsag
     inputTokens, outputTokens, reportedRequests, unreportedRequests,
     estimatedCostUsd: totalCostKnown ? estimatedCostUsd : null,
     unpricedRequests,
+  };
+}
+
+export function aggregateAiTokenUsage(rows: readonly PipelineFailureAnalysisUsageRow[], now = new Date()): AiTokenUsage {
+  const groups = new Map<string, PipelineFailureAnalysisUsageRow[]>();
+  const normalized = rows.map(row => row.providerKind === "lm-studio"
+    ? { ...row, inputUsdPerMillionTokens: 0, outputUsdPerMillionTokens: 0, estimatedCostUsd: 0 }
+    : row);
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const firstDay = today - 29 * 86_400_000;
+  for (const row of normalized) {
+    const calledAt = row.calledAt ? new Date(row.calledAt).getTime() : NaN;
+    if (!(calledAt >= firstDay && calledAt < today + 86_400_000)) continue;
+    const model = row.model || "Unknown model";
+    const group = groups.get(model);
+    if (group) group.push(row);
+    else groups.set(model, [row]);
+  }
+  return {
+    ...aggregateUsageTotals(normalized, now),
+    models: [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([model, calls]) => ({
+      model, ...aggregateUsageTotals(calls, now),
+    })),
   };
 }

@@ -254,6 +254,21 @@ export const AiTokenUsage = strict({
   unreportedRequests: tokenCount,
   estimatedCostUsd: z.number().nonnegative().finite().nullable(),
   unpricedRequests: tokenCount,
+  models: z.array(strict({
+    model: z.string(),
+    points: z.array(strict({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      inputTokens: tokenCount,
+      outputTokens: tokenCount,
+      estimatedCostUsd: z.number().nonnegative().finite().nullable(),
+    })),
+    inputTokens: tokenCount,
+    outputTokens: tokenCount,
+    reportedRequests: tokenCount,
+    unreportedRequests: tokenCount,
+    estimatedCostUsd: z.number().nonnegative().finite().nullable(),
+    unpricedRequests: tokenCount,
+  })),
 });
 export type AiTokenUsage = z.infer<typeof AiTokenUsage>;
 

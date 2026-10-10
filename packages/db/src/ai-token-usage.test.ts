@@ -39,6 +39,24 @@ test("rates snapshotted on different calls contribute independently", () => {
   expect(usage.points.at(-1)?.estimatedCostUsd).toBe(9);
 });
 
+test("model lines combine pipeline and review calls while keeping unknown cloud costs separate from free LM Studio", () => {
+  const usage = aggregateAiTokenUsage([
+    row({ model: "cloud", providerKind: "anthropic" }),
+    row({ model: "cloud", estimatedCostUsd: 0.5, inputUsdPerMillionTokens: null, outputUsdPerMillionTokens: null }),
+    row({ model: "unpriced", inputUsdPerMillionTokens: null }),
+    row({ model: "local", providerKind: "lm-studio", estimatedCostUsd: 8 }),
+    row({ model: "local", providerKind: "lm-studio", inputTokens: null, outputTokens: null, estimatedCostUsd: null, inputUsdPerMillionTokens: null, outputUsdPerMillionTokens: null }),
+    row({ model: "outside", calledAt: "2026-09-07T23:59:59Z" }),
+  ], now);
+  expect(usage.models.map(model => model.model)).toEqual(["cloud", "local", "unpriced"]);
+  expect(usage.models[0]).toMatchObject({ inputTokens: 2_000_000, outputTokens: 200_000, estimatedCostUsd: 3.5, reportedRequests: 2 });
+  expect(usage.models[0]!.points.at(-1)).toEqual({ date: "2026-10-07", inputTokens: 2_000_000, outputTokens: 200_000, estimatedCostUsd: 3.5 });
+  expect(usage.models[1]).toMatchObject({ estimatedCostUsd: 0, unreportedRequests: 1, unpricedRequests: 0 });
+  expect(usage.models[1]!.points.at(-1)?.estimatedCostUsd).toBe(0);
+  expect(usage.models[2]).toMatchObject({ estimatedCostUsd: null, unpricedRequests: 1 });
+  expect(usage).toMatchObject({ estimatedCostUsd: null, unpricedRequests: 1, unreportedRequests: 1 });
+});
+
 const analysis = (changes: Partial<PipelineAnalysisMetricsRow> = {}): PipelineAnalysisMetricsRow => ({
   ...row(), state: "completed", queuedAt: "2026-10-07T01:00:00.000Z",
   startedAt: "2026-10-07T01:00:05.000Z", finishedAt: "2026-10-07T01:00:25.000Z", ...changes,
