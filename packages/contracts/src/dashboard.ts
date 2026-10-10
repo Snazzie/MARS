@@ -11,7 +11,8 @@ const secretKey = /(secret|token|password|private.?key|encoded.?jit|jit.?config|
 function rejectSecrets(value: unknown, path: (string | number)[] = []): string | undefined {
   if (Array.isArray(value)) for (let i = 0; i < value.length; i++) { const error = rejectSecrets(value[i], [...path, i]); if (error) return error; }
   else if (value && typeof value === "object") for (const [key, child] of Object.entries(value)) {
-    if (secretKey.test(key)) return `Secret-like key is not permitted: ${[...path, key].join(".")}`;
+    const throughputMetric = key === "tokensPerSecond" && (child === null || (typeof child === "number" && Number.isFinite(child) && child >= 0));
+    if (secretKey.test(key) && !throughputMetric) return `Secret-like key is not permitted: ${[...path, key].join(".")}`;
     const error = rejectSecrets(child, [...path, key]); if (error) return error;
   }
   return undefined;

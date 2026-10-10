@@ -25,3 +25,9 @@ test("renders the empty state when all outcome counts are zero", () => {
   const empty = outcomes.map((value) => ({ ...value, platforms: { macos: 0, ubuntu: 0, windows: 0, other: 0 } }));
   expect(renderToStaticMarkup(<OutcomeBars outcomes={empty} />)).toContain("No outcomes recorded yet.");
 });
+
+test("totals jobs across every outcome and platform, including empty data", () => {
+  const populated = outcomes.map((item) => item.outcome === "failed" ? { ...item, platforms: { macos: 1, ubuntu: 2, windows: 3, other: 4 } } : item);
+  expect(renderToStaticMarkup(<OutcomeBars outcomes={populated} />)).toContain("Total jobs: <strong>18</strong>");
+  expect(renderToStaticMarkup(<OutcomeBars outcomes={[]} />)).toContain("Total jobs: <strong>0</strong>");
+});

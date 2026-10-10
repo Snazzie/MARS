@@ -36,7 +36,9 @@ export function OutcomeBars({ outcomes, label = "Job outcomes" }: { outcomes: re
     focus: "group-x",
     tooltip: { use: tooltip, anchor: "group-center", placement: ["top", "right", "left", "bottom"], sort: "color-domain" },
   }), [rows]);
-  if (!total) return <p className="chart-empty">No outcomes recorded yet.</p>;
   const summary = outcomeOrder.flatMap((outcome) => platformOrder.map(({ key }) => `${outcomeLabels[outcome]} ${platformLabels[key]}: ${outcomes.find((item) => item.outcome === outcome)?.platforms[key] ?? 0}`)).join(", ");
-  return <div className="chart-frame outcome-chart" role="img" aria-label={`${label}. ${summary}`}><Chart definition={definition} height={180} ariaLabel={label} /></div>;
+  return <>
+    <p className="chart-empty">Total jobs: <strong>{total.toLocaleString()}</strong></p>
+    {total ? <div className="chart-frame outcome-chart" role="img" aria-label={`${label}. Total jobs: ${total}. ${summary}`}><Chart definition={definition} height={180} ariaLabel={label} /></div> : <p className="chart-empty">No outcomes recorded yet.</p>}
+  </>;
 }

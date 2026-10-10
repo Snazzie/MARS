@@ -32,6 +32,8 @@ Database and protocol adapters normalize `Date | string` values to ISO-8601 stri
 
 Existing API error codes and status codes are preserved. Schema failures continue to produce the existing `invalid_request` or `invalid_response` behavior. No retry or fallback behavior is added.
 
+The recursive secret-key guard permits the exact `tokensPerSecond` telemetry field only when its value is a finite nonnegative number or null. Strings, objects, and other secret-like keys remain rejected, including in nested list responses.
+
 ## Testing
 
 - Compile-time `satisfies` assertions verify representative endpoint definitions use the intended schemas.

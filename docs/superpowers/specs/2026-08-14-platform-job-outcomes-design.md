@@ -42,6 +42,7 @@ Replace `OutcomeBars` with a vertical stacked bar chart:
 - the vertical axis shows job counts;
 - each bar stacks macOS, Ubuntu, Windows, and Other in a stable order;
 - a visible legend maps platform names to stable colors;
+- show **Total jobs** above the chart, summing all outcome/platform cells; show zero even in the empty state;
 - each outcome remains visible when its total is zero;
 - if every count is zero, show the existing chart empty-state treatment instead of an empty plot.
 

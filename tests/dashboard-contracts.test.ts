@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ApiError, CostCenterDto, CostCenterPricingProvider, CreatePoolRequest, CursorPage, OnboardingStep, OverviewDto, RepositorySummary, RunDetail, WorkerDetail } from "../packages/contracts/src/index.ts";
+import { ApiError, CostCenterDto, CostCenterPricingProvider, CreatePoolRequest, CursorPage, OnboardingStep, OverviewDto, PipelineAnalysisWork, RepositorySummary, RunDetail, WorkerDetail } from "../packages/contracts/src/index.ts";
 
 const run = { id: "run-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app", runNumber: 4, runAttempt: 1, workflowName: "CI", event: "workflow_dispatch", branch: "main", commitSha: "0123456789abcdef", actorLogin: "octocat", status: "completed" as const, conclusion: "success" as const, queuedAt: "2026-08-11T10:00:00Z", startedAt: "2026-08-11T10:01:00Z", completedAt: "2026-08-11T10:02:00Z", durationMs: 60_000, runtimeBoundary: "Kata VM-backed container" as const };
 
@@ -82,5 +82,30 @@ describe("dashboard contracts", () => {
   test("rejects secret-like keys, including nested DTO payloads", () => {
     expect(ApiError.safeParse({ code: "bad", message: "bad", requestId: "req", details: { accessToken: "redacted" } }).success).toBe(false);
     expect(OverviewDto.safeParse({ organizationId: "org-1", period: "24h", queued: 0, running: 0, completed: 0, failed: 0, queueP50Ms: 0, queueP95Ms: 0, durationP50Ms: 0, durationP95Ms: 0, concurrency: 0, utilization: { vcpu: 0, memory: 0, storage: 0, pods: 0 }, privateKey: "redacted" }).success).toBe(false);
+  });
+  test("accepts throughput metrics through nested analysis list validation", () => {
+    const item = {
+      id: "analysis-1", organizationId: "org-1", repositoryId: "repo-1", repositoryName: "acme/app",
+      runId: "run-1", runNumber: 4, runAttempt: 1, workflowName: "CI", state: "completed",
+      providerName: "provider", model: "model", result: null, comments: [], errorCode: null,
+      metrics: {
+        queuedAt: run.queuedAt, startedAt: run.startedAt, finishedAt: run.completedAt,
+        providerCalledAt: run.startedAt, queueWaitMs: 60_000, durationMs: 60_000,
+        tokensPerSecond: 12.5, usage: { input: 100, output: 750, total: 850 }, estimatedCostUsd: 0.01,
+      },
+    };
+    const page = CursorPage(PipelineAnalysisWork);
+    const result = page.parse({ items: [item, { ...item, id: "analysis-2", metrics: { ...item.metrics, tokensPerSecond: null } }], nextCursor: null });
+    expect(result.items.map(value => value.metrics.tokensPerSecond)).toEqual([12.5, null]);
+  });
+  test("throughput allowance cannot carry secrets or disable sibling secret checks", () => {
+    for (const details of [
+      { tokensPerSecond: "secret-value" },
+      { tokensPerSecond: { accessToken: "secret-value" } },
+      { tokensPerSecond: 12.5, accessToken: "secret-value" },
+      { tokensPerSecond: null, nested: { password: "secret-value" } },
+    ]) {
+      expect(ApiError.safeParse({ code: "bad", message: "bad", requestId: "req", details }).success).toBe(false);
+    }
   });
 });
