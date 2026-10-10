@@ -51,6 +51,11 @@ const routeQueries = defineQueries(db => ({
   failureAnalysisSettings: db.select({ enabled: schema.repositoryFailureAnalysisSettings.enabled, providerId: schema.repositoryFailureAnalysisSettings.providerId, enabledSince: schema.repositoryFailureAnalysisSettings.enabledSince }).from(schema.repositoryFailureAnalysisSettings).where(eq(schema.repositoryFailureAnalysisSettings.repositoryId, sql.placeholder("repositoryId"))).limit(1).prepare("route_failure_analysis_settings"),
   failureAnalysisProvider: db.select({ id: schema.llmProviders.id }).from(schema.llmProviders).where(eq(schema.llmProviders.id, sql.placeholder("providerId"))).limit(1).prepare("route_failure_analysis_provider"),
   failureAnalysisUpsert: db.insert(schema.repositoryFailureAnalysisSettings).values({ organizationId: sql.placeholder("organizationId"), repositoryId: sql.placeholder("repositoryId"), enabled: sql.placeholder("enabled"), providerId: sql.placeholder("providerId"), enabledSince: sql`${sql.placeholder("enabledSince")}`, updatedAt: sql`now()` }).onConflictDoUpdate({ target: schema.repositoryFailureAnalysisSettings.repositoryId, set: { enabled: sql`${sql.placeholder("enabled")}`, providerId: sql`${sql.placeholder("providerId")}`, enabledSince: sql`${sql.placeholder("enabledSince")}`, updatedAt: sql`now()` } }).returning({ enabled: schema.repositoryFailureAnalysisSettings.enabled, providerId: schema.repositoryFailureAnalysisSettings.providerId, enabledSince: schema.repositoryFailureAnalysisSettings.enabledSince }).prepare("route_failure_analysis_upsert"),
+  prReviewRepository: db.select({ id: schema.dashboardRepositories.id }).from(schema.dashboardRepositories).where(and(eq(schema.dashboardRepositories.id, sql.placeholder("repositoryId")), eq(schema.dashboardRepositories.organizationId, sql.placeholder("organizationId")))).limit(1).prepare("route_pr_review_repository"),
+  prReviewSettings: db.select().from(schema.repositoryPrReviewSettings).where(and(eq(schema.repositoryPrReviewSettings.organizationId, sql.placeholder("organizationId")), eq(schema.repositoryPrReviewSettings.repositoryId, sql.placeholder("repositoryId")))).limit(1).prepare("route_pr_review_settings"),
+  prReviewProvider: db.select({ id: schema.llmProviders.id }).from(schema.llmProviders).where(eq(schema.llmProviders.id, sql.placeholder("providerId"))).limit(1).prepare("route_pr_review_provider"),
+  prReviewSettingsUpsert: db.insert(schema.repositoryPrReviewSettings).values({ organizationId: sql.placeholder("organizationId"), repositoryId: sql.placeholder("repositoryId"), enabled: sql.placeholder("enabled"), providerId: sql.placeholder("providerId"), enabledSince: sql`${sql.placeholder("enabledSince")}`, updatedAt: sql`now()` }).onConflictDoUpdate({ target: schema.repositoryPrReviewSettings.repositoryId, set: { enabled: sql`${sql.placeholder("enabled")}`, providerId: sql`${sql.placeholder("providerId")}`, enabledSince: sql`${sql.placeholder("enabledSince")}`, updatedAt: sql`now()` } }).returning().prepare("route_pr_review_settings_upsert"),
+  latestPrReview: db.select().from(schema.prReviews).where(and(eq(schema.prReviews.organizationId, sql.placeholder("organizationId")), eq(schema.prReviews.repositoryId, sql.placeholder("repositoryId")))).orderBy(desc(schema.prReviews.createdAt)).limit(1).prepare("route_latest_pr_review"),
 }));
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -60,6 +65,7 @@ import { adoptWorker, renameWorker } from "../workers.ts";
 import { configurePendingWorker, purgeWorkerRunnerCache } from "../worker-requests.ts";
 import { discoverWorkflowFiles } from "../workflow-pr.ts";
 import { ApiError, CostCenterDto, CostCenterPricingProvider, DashboardWorkerCachePage, DashboardWorkerMutationResponse, OverviewDto, CursorPage, OrganizationSummary, RepositorySummary, RunSummary, RunDetail, LogChunk, WorkerDetail, PoolSummary, CreatePoolRequest, WorkerConfiguration, RunnerWorkflowFile, RunnerWorkflowPreview, RunnerWorkflowPrRequest, RunnerWorkflowPrResult, JobTimingSnapshot, JobTimingAggregate, JobResourceTrendResponse, JobResourceTrendSort, JobResourceSample, WorkerHealth, JobLabelRecommendation, JobLabelRecommendationQuery, GithubConnectionSummary, GithubRateLimitStats, WorkerEventPayload, WorkerUpgradeStatus, RuntimePlatform, RuntimeDriverName, selectedRuntimeDriver } from "@mars/contracts";
+import { PrReviewSummary, RepositoryPrReviewSettings } from "@mars/contracts";
 import { supportsExclusiveCpuPlacement } from "@mars/contracts";
 import { WorkerDispatchError } from "../worker-dispatch.ts";
 import { WorkerReleaseCatalogUnavailable } from "../worker-release.ts";
@@ -239,6 +245,42 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     const enabledSince = body.enabled ? (previous?.enabled ? previous.enabledSince : new Date().toISOString()) : null;
     const [saved] = await queries.failureAnalysisUpsert.execute({ organizationId, repositoryId, enabled: body.enabled, providerId: body.providerId, enabledSince });
     return c.json({ organizationId, repositoryId, enabled: saved.enabled, providerId: saved.providerId, enabledSince: saved.enabledSince ? new Date(saved.enabledSince).toISOString() : null }, 200, { "cache-control": "no-store" });
+  }));
+  app.get("/api/organizations/:organizationId/repositories/:repositoryId/pr-review", safe(async (c) => {
+    const organizationId = c.req.param("organizationId");
+    const denied = await guard(c, deps, organizationId); if (denied) return denied;
+    const repositoryId = c.req.param("repositoryId");
+    const queries = routeQueries(deps.db);
+    const [repository] = await queries.prReviewRepository.execute({ organizationId, repositoryId });
+    if (!repository) return error(c, 404, "not_found", "Resource not found");
+    const [settings] = await queries.prReviewSettings.execute({ organizationId, repositoryId });
+    return c.json(RepositoryPrReviewSettings.parse({ organizationId, repositoryId, enabled: settings?.enabled ?? false, providerId: settings?.providerId ?? null, enabledSince: settings?.enabledSince ? new Date(settings.enabledSince).toISOString() : null, updatedAt: settings?.updatedAt ? new Date(settings.updatedAt).toISOString() : new Date(0).toISOString() }), 200, { "cache-control": "no-store" });
+  }));
+  app.put("/api/organizations/:organizationId/repositories/:repositoryId/pr-review", safe(async (c) => {
+    const organizationId = c.req.param("organizationId");
+    const denied = await guard(c, deps, organizationId); if (denied) return denied;
+    if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
+    const repositoryId = c.req.param("repositoryId");
+    const queries = routeQueries(deps.db);
+    const [repository] = await queries.prReviewRepository.execute({ organizationId, repositoryId });
+    if (!repository) return error(c, 404, "not_found", "Resource not found");
+    const body = z.object({ enabled: z.boolean(), providerId: z.string().uuid().nullable() }).strict().parse(await c.req.json());
+    if (body.enabled && !body.providerId) return error(c, 400, "invalid_request", "An enabled repository requires a provider");
+    if (body.providerId && !(await queries.prReviewProvider.execute({ providerId: body.providerId })).length) return error(c, 400, "invalid_request", "Provider does not exist");
+    const [previous] = await queries.prReviewSettings.execute({ organizationId, repositoryId });
+    const enabledSince = body.enabled ? (previous?.enabled ? previous.enabledSince : new Date().toISOString()) : null;
+    const [saved] = await queries.prReviewSettingsUpsert.execute({ organizationId, repositoryId, enabled: body.enabled, providerId: body.providerId, enabledSince });
+    return c.json(RepositoryPrReviewSettings.parse({ organizationId, repositoryId, enabled: saved.enabled, providerId: saved.providerId, enabledSince: saved.enabledSince ? new Date(saved.enabledSince).toISOString() : null, updatedAt: new Date(saved.updatedAt).toISOString() }), 200, { "cache-control": "no-store" });
+  }));
+  app.get("/api/organizations/:organizationId/repositories/:repositoryId/pr-review/latest", safe(async (c) => {
+    const organizationId = c.req.param("organizationId");
+    const denied = await guard(c, deps, organizationId); if (denied) return denied;
+    const repositoryId = c.req.param("repositoryId");
+    const queries = routeQueries(deps.db);
+    const [repository] = await queries.prReviewRepository.execute({ organizationId, repositoryId });
+    if (!repository) return error(c, 404, "not_found", "Resource not found");
+    const [review] = await queries.latestPrReview.execute({ organizationId, repositoryId });
+    return c.json(review ? PrReviewSummary.parse({ ...review, result: review.result ?? null, reviewUrl: review.reviewUrl ?? null, createdAt: new Date(review.createdAt).toISOString(), settingsUpdatedAt: new Date(review.settingsUpdatedAt).toISOString(), startedAt: review.startedAt ? new Date(review.startedAt).toISOString() : null, completedAt: review.completedAt ? new Date(review.completedAt).toISOString() : null, publicationStartedAt: review.publicationStartedAt ? new Date(review.publicationStartedAt).toISOString() : null, providerCalledAt: review.providerCalledAt ? new Date(review.providerCalledAt).toISOString() : null }) : null, 200, { "cache-control": "no-store" });
   }));
   app.get("/api/admin/logs", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");

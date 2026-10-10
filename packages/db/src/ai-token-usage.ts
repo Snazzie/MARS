@@ -7,6 +7,7 @@ export interface PipelineFailureAnalysisUsageRow {
   outputTokens: number | null;
   inputUsdPerMillionTokens: number | null;
   outputUsdPerMillionTokens: number | null;
+  estimatedCostUsd?: number | null;
 }
 
 function safeSum(target: number, value: number): number {
@@ -20,6 +21,7 @@ function reportedCount(value: number | null): number | null {
 }
 
 export function estimateAiRequestCost(row: PipelineFailureAnalysisUsageRow): number | null {
+  if (row.estimatedCostUsd !== undefined) return row.estimatedCostUsd !== null && Number.isFinite(row.estimatedCostUsd) && row.estimatedCostUsd >= 0 ? row.estimatedCostUsd : null;
   const inputPrice = row.inputUsdPerMillionTokens, outputPrice = row.outputUsdPerMillionTokens;
   if (inputPrice === null || outputPrice === null || !Number.isFinite(inputPrice) || !Number.isFinite(outputPrice) || inputPrice < 0 || outputPrice < 0) return null;
   if (inputPrice === 0 && outputPrice === 0) return 0;

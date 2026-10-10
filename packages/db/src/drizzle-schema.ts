@@ -442,6 +442,68 @@ export const repositoryFailureAnalysisSettings = pgTable("repository_failure_ana
 	check("repository_failure_analysis_settings_enabled_provider_check", sql`NOT enabled OR provider_id IS NOT NULL`),
 ]);
 
+export const repositoryPrReviewSettings = pgTable("repository_pr_review_settings", {
+	organizationId: uuid("organization_id").notNull(),
+	repositoryId: uuid("repository_id").primaryKey().notNull(),
+	enabled: boolean().default(false).notNull(),
+	providerId: uuid("provider_id"),
+	enabledSince: timestamp("enabled_since", { withTimezone: true, mode: 'string' }),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({ columns: [table.organizationId, table.repositoryId], foreignColumns: [dashboardRepositories.organizationId, dashboardRepositories.id], name: "repository_pr_review_settings_repository_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.providerId], foreignColumns: [llmProviders.id], name: "repository_pr_review_settings_provider_fkey" }).onDelete("restrict"),
+	check("repository_pr_review_settings_enabled_provider_check", sql`NOT enabled OR provider_id IS NOT NULL`),
+]);
+
+export const prReviews = pgTable("pr_reviews", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	repositoryId: uuid("repository_id").notNull(),
+	prNumber: integer("pr_number").notNull(),
+	baseSha: text("base_sha").notNull(),
+	headSha: text("head_sha").notNull(),
+	trigger: text().notNull(),
+	commentId: bigint("comment_id", { mode: "number" }),
+	requester: text(),
+	providerId: uuid("provider_id"),
+	providerSnapshot: jsonb("provider_snapshot").notNull(),
+	settingsUpdatedAt: timestamp("settings_updated_at", { withTimezone: true, mode: 'string' }).notNull(),
+	analysisState: text("analysis_state").default("pending").notNull(),
+	publicationState: text("publication_state").default("pending").notNull(),
+	result: jsonb(),
+	source: jsonb().notNull(),
+	inputTokens: bigint("input_tokens", { mode: "number" }),
+	outputTokens: bigint("output_tokens", { mode: "number" }),
+	estimatedCostUsd: numeric("estimated_cost_usd", { precision: 14, scale: 6, mode: "number" }),
+	errorCode: text("error_code"),
+	reviewId: bigint("review_id", { mode: "number" }),
+	reviewUrl: text("review_url"),
+	providerCalledAt: timestamp("provider_called_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }),
+	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
+	publicationStartedAt: timestamp("publication_started_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	unique("pr_reviews_revision_key").on(table.organizationId, table.repositoryId, table.prNumber, table.baseSha, table.headSha),
+	foreignKey({ columns: [table.organizationId, table.repositoryId], foreignColumns: [dashboardRepositories.organizationId, dashboardRepositories.id], name: "pr_reviews_repository_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.providerId], foreignColumns: [llmProviders.id], name: "pr_reviews_provider_fkey" }).onDelete("set null"),
+	check("pr_reviews_pr_number_check", sql`pr_number > 0`),
+	check("pr_reviews_trigger_check", sql`trigger = ANY (ARRAY['opened'::text, 'synchronize'::text, 'ready_for_review'::text, 'reopened'::text, 'review_command'::text])`),
+	check("pr_reviews_analysis_state_check", sql`analysis_state = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'skipped'::text, 'superseded'::text])`),
+	check("pr_reviews_publication_state_check", sql`publication_state = ANY (ARRAY['pending'::text, 'publishing'::text, 'published'::text, 'failed'::text, 'unknown'::text])`),
+]);
+
+export const prReviewCommands = pgTable("pr_review_commands", {
+	repositoryId: uuid("repository_id").notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	commentId: bigint("comment_id", { mode: "number" }).notNull(),
+	requester: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	unique("pr_review_commands_repository_comment_key").on(table.repositoryId, table.commentId),
+	foreignKey({ columns: [table.organizationId, table.repositoryId], foreignColumns: [dashboardRepositories.organizationId, dashboardRepositories.id], name: "pr_review_commands_repository_fkey" }).onDelete("cascade"),
+]);
+
 export const pipelineFailureAnalyses = pgTable("pipeline_failure_analyses", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	organizationId: uuid("organization_id").notNull(),

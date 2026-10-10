@@ -1,6 +1,6 @@
 import { SecretBox } from "./auth.ts";
 import { expect, test } from "bun:test";
-import { LlmProvidersService, generatePipelineAnalysis, sanitizeProviderText, validateProviderApiRoot, type LlmProviderConfig } from "./llm-providers.ts";
+import { LlmProvidersService, generatePipelineAnalysis, generatePrReview, sanitizeProviderText, validateProviderApiRoot, type LlmProviderConfig } from "./llm-providers.ts";
 
 const context = { run: { workflow: "test", attempt: 1 }, failedJobs: [{ jobId: 42, steps: [{ stepNumber: 3, name: "assert", excerpt: "AssertionError: expected 2 but got 3" }] }] };
 const valid = { summary: "Assertion failed", failures: [{ jobId: 42, stepNumber: 3, explanation: "The expected value differs.", evidence: ["expected 2 but got 3"], suggestedFix: "Update the expected value." }] };
@@ -171,4 +171,36 @@ test("LM Studio model discovery includes unloaded LLMs but excludes embedding an
     { type: "llm", key: "loaded", loaded_instances: [{ id: "instance" }] },
   ] }));
   expect(await service.models({ kind: "lm-studio", baseUrl: "" })).toEqual(["loaded", "unloaded"]);
+});
+test("generates structured PR findings through the shared provider transport and records usage", async () => {
+  const provider = { name: "cloud", kind: "openai-compatible" as const, baseUrl: "http://localhost:11434/v1", model: "model", encryptedApiKey: "review-secret" };
+  const usage: Array<{ inputTokens: number; outputTokens: number } | null> = [];
+  const finding = { path: "src/a.ts", line: 3, endLine: null, severity: "High" as const, confidencePercent: 82, evidence: "unsafe call", impact: "Input leaks.", correction: "Validate input.", suggestion: null };
+  const result = await generatePrReview({
+    provider, context: { pullRequest: { headSha: "abc", title: "review-secret" }, files: [{ path: "src/a.ts", source: "unsafe call()" }] },
+    onUsage: value => { usage.push(value); },
+  }, async (_url, init) => {
+    const request = JSON.parse(String(init?.body));
+    expect(request.messages[1].content).not.toContain("review-secret");
+    return Response.json({ choices: [{ message: { content: JSON.stringify({ findings: [finding] }) } }], usage: { prompt_tokens: 14, completion_tokens: 7 } });
+  });
+  expect(result.findings).toEqual([finding]);
+  expect(usage).toEqual([{ inputTokens: 14, outputTokens: 7 }]);
+});
+test("preserves PR eligibility aborts instead of reporting them as provider failures", async () => {
+  const provider = { name: "cloud", kind: "openai-compatible" as const, baseUrl: "http://localhost:11434/v1", model: "model" };
+  await expect(generatePrReview({
+    provider, context: {}, onRequest: async () => { throw new Error("pr_review_superseded"); },
+  }, async () => { throw new Error("provider should not be called"); })).rejects.toThrow("pr_review_superseded");
+});
+
+test("rejects invalid structured PR findings without relaxing provider output validation", async () => {
+  const provider = { name: "cloud", kind: "openai-compatible" as const, baseUrl: "http://localhost:11434/v1", model: "model" };
+  await expect(generatePrReview({ provider, context: {} }, async () => Response.json({ choices: [{ message: { content: '{"findings":[{"confidencePercent":60}]}' } }] }))).rejects.toThrow("llm_invalid_response");
+});
+
+test.each([undefined, null, 59.5, -1, 101, "85"])("invalid PR confidence %p cannot become a publishable result", async confidencePercent => {
+  const provider: LlmProviderConfig = { name: "cloud", kind: "openai-compatible", baseUrl: "http://localhost:11434/v1", model: "model" };
+  const finding = { path: "calc.ts", line: 1, endLine: null, severity: "High", confidencePercent, evidence: "n / 0", impact: "Division by zero.", correction: "Use the denominator.", suggestion: null };
+  await expect(generatePrReview({ provider, context: {} }, async () => Response.json({ choices: [{ message: { content: JSON.stringify({ findings: [finding] }) } }] }))).rejects.toThrow("llm_invalid_response");
 });

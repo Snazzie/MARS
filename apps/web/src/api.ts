@@ -43,6 +43,8 @@ import {
   LlmProviderModels,
   AiTokenUsage,
   RepositoryFailureAnalysisSettings,
+  RepositoryPrReviewSettings,
+  PrReviewSummary,
   GlobalFailureAnalysisSettings,
   GlobalFailureAnalysisSaveRequest,
 } from "@mars/contracts";
@@ -540,3 +542,11 @@ export const saveRepositoryFailureAnalysisSettings = (organizationId: string, re
   request(`/api/organizations/${encodeURIComponent(organizationId)}/repositories/${encodeURIComponent(repositoryId)}/failure-analysis`, RepositoryFailureAnalysisSettings, {
     method: "PUT", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
+export const getRepositoryPrReviewSettings = (organizationId: string, repositoryId: string) =>
+  request(`/api/organizations/${encodeURIComponent(organizationId)}/repositories/${encodeURIComponent(repositoryId)}/pr-review`, RepositoryPrReviewSettings, { cache: "no-store" });
+export const saveRepositoryPrReviewSettings = (organizationId: string, repositoryId: string, input: { enabled: boolean; providerId: string | null }) =>
+  request(`/api/organizations/${encodeURIComponent(organizationId)}/repositories/${encodeURIComponent(repositoryId)}/pr-review`, RepositoryPrReviewSettings, {
+    method: "PUT", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+export const getLatestPrReview = (organizationId: string, repositoryId: string) =>
+  request(`/api/organizations/${encodeURIComponent(organizationId)}/repositories/${encodeURIComponent(repositoryId)}/pr-review/latest`, PrReviewSummary.nullable(), { cache: "no-store" });

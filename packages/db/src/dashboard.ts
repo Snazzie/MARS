@@ -26,12 +26,33 @@ export async function getAiTokenUsage(db: DashboardDb, now = new Date()): Promis
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const from = new Date(today);
   from.setUTCDate(from.getUTCDate() - 29);
-  const rows = await aiTokenUsageQueries(db).rows.execute({
-    from: from.toISOString().slice(0, 10),
-    to: today.toISOString().slice(0, 10),
-  });
-  return aggregateAiTokenUsage((rows ?? []) as PipelineFailureAnalysisUsageRow[], now);
+  const queryArgs = { from: from.toISOString().slice(0, 10), to: today.toISOString().slice(0, 10) };
+  const [pipelineRows, prRows] = await Promise.all([
+    aiTokenUsageQueries(db).rows.execute(queryArgs),
+    prReviewUsageQueries(db).rows.execute(queryArgs),
+  ]);
+  const prUsageRows: PipelineFailureAnalysisUsageRow[] = (prRows ?? []).map(row => ({
+    calledAt: row.calledAt,
+    inputTokens: row.inputTokens,
+    outputTokens: row.outputTokens,
+    inputUsdPerMillionTokens: null,
+    outputUsdPerMillionTokens: null,
+    estimatedCostUsd: row.estimatedCostUsd,
+  }));
+  return aggregateAiTokenUsage([...(pipelineRows ?? []) as PipelineFailureAnalysisUsageRow[], ...prUsageRows], now);
 }
+
+const prReviewUsageQueries = defineQueries(db => ({
+  rows: db.select({
+    calledAt: schema.prReviews.providerCalledAt,
+    inputTokens: schema.prReviews.inputTokens,
+    outputTokens: schema.prReviews.outputTokens,
+    estimatedCostUsd: schema.prReviews.estimatedCostUsd,
+  }).from(schema.prReviews)
+    .where(sql`${schema.prReviews.providerCalledAt} >= (${sql.placeholder("from")}::date::timestamp AT TIME ZONE 'UTC') AND ${schema.prReviews.providerCalledAt} < ((${sql.placeholder("to")}::date + 1)::timestamp AT TIME ZONE 'UTC')`)
+    .prepare("dashboard_pr_review_usage"),
+}));
+
 const statusOrder: Record<RunSummary["status"], number> = { queued: 0, in_progress: 1, completed: 2 };
 const terminalConclusions = new Set(["success", "failure", "cancelled", "skipped", "neutral"]);
 export function monotonicTransition(current: RunTransition, next: RunTransition): RunTransition {

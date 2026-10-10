@@ -132,6 +132,58 @@ provider and that evidence-grounded AI suggestions may be published to associate
 pull requests by the installed MARS GitHub App. Only newly completed failures
 after opt-in are analyzed; no historical backfill or automatic retry is performed.
 
+
+Pull-request review is an independent repository opt-in in **Settings**; pipeline
+failure-analysis enablement never enables it. Administrators select a saved provider
+profile separately for each repository. Enabling is prospective and does not backfill
+open PRs. Eligible opened, reopened, ready-for-review, and synchronized revisions
+may be reviewed; drafts, closed PRs, and description-only changes are not reviewed.
+An authorized repository writer can also request the current revision by posting a
+standalone `/review` PR-conversation comment. Publication is advisory: MARS uses GitHub
+COMMENT reviews and never approves, requests changes, blocks CI, applies suggestions,
+executes repository code, commits, pushes, or merges.
+Repeated `/review` commands reuse pending, running, or existing same-revision work;
+they do not authorize another model call or a duplicate review. Commands from bots,
+users without current write/maintain/admin access, ordinary issues, quoted text,
+prose, fenced code, or comments with arguments are ignored.
+
+Opting in shares PR metadata and bounded source code with the selected provider,
+including private-repository content and changes originating from forks. Reviews are
+limited to validated findings, with at most 20 findings and only findings at or above
+60% model-estimated confidence published. The confidence is not calibrated probability.
+Reviews use fixed limits of 40 changed files, 32 KiB per source file, 64 KiB
+total context, and 8 KiB for `.mars/pr-rules.md`; oversized rules fail visibly
+instead of being truncated. Partial file or context coverage is reported explicitly.
+`.mars/pr-rules.md` is optional guidance from the PR base revision and cannot override
+policy. The rules file is fetched from the immutable base commit, never the PR head.
+A proposed rules-file change does not govern its own review. Missing rules use
+built-in criteria; permission, unsupported-content, and size failures are visible
+errors. Provider usage/cost uses the captured provider pricing and reported tokens;
+unknown usage/pricing is shown as unavailable, not free. Existing reviews remain tied
+to the exact reviewed commit.
+
+The GitHub App needs `pull_request` and `issue_comment` webhook subscriptions and
+existing installed Apps may need their subscriptions refreshed in GitHub App settings;
+updating the generated manifest alone does not change existing installations.
+Check installation permissions for source reads (`contents: read`), review publication
+(`pull_requests: write`), and collaborator permission lookup (`metadata: read`, granted
+by GitHub Apps). PR-conversation delivery does not require `issues: write`. Keep the
+existing App's unrelated feature permissions separate from the review processor:
+the processor exposes no repository mutation APIs. Each publication is one
+commit-pinned batch; interrupted/unknown publication outcomes are reconciled by the
+App-owned marker, bot identity, and commit ID and are never blindly reposted.
+
+Generation requests have a 90-second deadline. Use a configured model that returns
+final structured JSON within that limit; reasoning-only output is not a completed
+review or diagnostic. Failed attempts remain visible. `/review` cannot rerun the
+same captured revision, including a failed attempt; an author-driven new revision
+is required for another analysis.
+
+Schema rollout is additive (`0011_blue_centennial`): run `packages/db`'s
+`db:migrate` before starting the control plane. Rolling back the application does
+not require deleting PR-review tables or settings; keep the migration journal and
+existing CI-analysis data intact.
+
 Run `bun run dev:worker` on Windows x64/ARM64, Apple Silicon macOS, or Linux
 x64/ARM64. It chooses the existing worker runtime for the host; the worker
 reports its actual runtime capabilities to the control plane. Host-specific

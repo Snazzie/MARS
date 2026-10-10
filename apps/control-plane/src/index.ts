@@ -1,5 +1,6 @@
 import { processPipelineFailureAnalyses } from "./pipeline-failure-analysis.ts";
-import { LlmProvidersService, type LlmProviderConfig } from "./llm-providers.ts";
+import { processPrReviews } from "./pr-review.ts";
+import { LlmProvidersService, generatePrReview, type LlmProviderConfig } from "./llm-providers.ts";
 import { and, asc, eq, ne, inArray, sql } from "drizzle-orm";
 import { defineQueries, schema, completeOnboardingIfReady, createDb, ensureDatabase, migrateDatabase, type DashboardDb } from "@mars/db";
 import { CURRENT_WORKER_CONTRACT_VERSION, WorkerReleaseOciDigest, sanitizeDiagnosticText, type WorkerBuildImagePayload, type WorkerCommand, type WorkerReleaseManifest } from "@mars/contracts";
@@ -44,8 +45,8 @@ const startupQueries = defineQueries(db => ({
   llmInsert: db.insert(schema.llmProviders).values({ name: sql.placeholder("name"), kind: sql.placeholder("kind"), baseUrl: sql.placeholder("baseUrl"), model: sql.placeholder("model"), inputUsdPerMillionTokens: sql.placeholder("inputUsdPerMillionTokens"), outputUsdPerMillionTokens: sql.placeholder("outputUsdPerMillionTokens"), encryptedApiKey: sql.placeholder("encryptedApiKey") }).returning().prepare("control_plane_llm_insert"),
   llmUpdate: db.update(schema.llmProviders).set({ name: sql`${sql.placeholder("name")}`, kind: sql`${sql.placeholder("kind")}`, baseUrl: sql`${sql.placeholder("baseUrl")}`, model: sql`${sql.placeholder("model")}`, inputUsdPerMillionTokens: sql`${sql.placeholder("inputUsdPerMillionTokens")}`, outputUsdPerMillionTokens: sql`${sql.placeholder("outputUsdPerMillionTokens")}`, encryptedApiKey: sql`${sql.placeholder("encryptedApiKey")}`, updatedAt: sql`now()` }).where(eq(schema.llmProviders.id, sql.placeholder("id"))).returning().prepare("control_plane_llm_update"),
   llmDelete: db.delete(schema.llmProviders).where(eq(schema.llmProviders.id, sql.placeholder("id"))).returning({ id: schema.llmProviders.id }).prepare("control_plane_llm_delete"),
-  llmUseCount: db.select({ count: sql<number>`count(*)::int + (SELECT count(*)::int FROM ${schema.globalFailureAnalysisSettings} WHERE ${schema.globalFailureAnalysisSettings.providerId}=${sql.placeholder("id")})` }).from(schema.repositoryFailureAnalysisSettings).where(eq(schema.repositoryFailureAnalysisSettings.providerId, sql.placeholder("id"))).prepare("control_plane_llm_use_count"),
-  githubAppId: db.select({ appId: schema.githubAppConfig.appId }).from(schema.githubAppConfig).where(eq(schema.githubAppConfig.singleton, true)).prepare("control_plane_github_app_id"),
+  llmUseCount: db.select({ count: sql<number>`count(*)::int + (SELECT count(*)::int FROM ${schema.globalFailureAnalysisSettings} WHERE ${schema.globalFailureAnalysisSettings.providerId}=${sql.placeholder("id")}) + (SELECT count(*)::int FROM ${schema.repositoryPrReviewSettings} WHERE ${schema.repositoryPrReviewSettings.providerId}=${sql.placeholder("id")})` }).from(schema.repositoryFailureAnalysisSettings).where(eq(schema.repositoryFailureAnalysisSettings.providerId, sql.placeholder("id"))).prepare("control_plane_llm_use_count"),
+  githubAppId: db.select({ appId: schema.githubAppConfig.appId, slug: schema.githubAppConfig.slug }).from(schema.githubAppConfig).where(eq(schema.githubAppConfig.singleton, true)).prepare("control_plane_github_app_id"),
 }));
 
 export function formatJobReconciliationReport(report: ReconcileReport): string | undefined {
@@ -648,6 +649,21 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
           githubAppId: app?.appId == null ? undefined : Number(app.appId),
         });
       } catch (error) { console.error("Pipeline failure analysis processing failed", error); }
+    }, 15_000, false);
+    startReconciliationScheduler(async () => {
+      try {
+        const [app] = await startupQueries(db).githubAppId.execute({});
+        await processPrReviews({
+          db, secretBox,
+          providerConfig: id => llmProviders.config(id),
+          generate: input => generatePrReview(input),
+          installationToken: id => githubApp.getInstallationToken(id),
+          githubFetchForInstallation: id => githubRateLimits.scopedFetch(id, "background") as unknown as typeof fetch,
+          installationBlocked: id => githubRateLimits.isBackgroundBlocked(id),
+          githubAppId: app?.appId == null ? undefined : Number(app.appId),
+          githubAppSlug: app?.slug ?? undefined,
+        });
+      } catch (error) { console.error("PR review processing failed", error); }
     }, 15_000, false);
     triggerReconciliation = reconciliationScheduler.trigger;
     const runRetention = async () => { try { console.log("Retention pruner", await pruneExpiredData(db)); } catch (error) { console.error("Retention pruning failed", error); } };

@@ -10,7 +10,7 @@ function fixture(admin: boolean, acknowledgedProvider = true) {
   client.setQueryData(["organizations"], [{ id: "org-1", login: "workspace" }]);
   client.setQueryData(["admin", "llm-providers"], [{ id: "provider-1", name: "Private profile", kind: "openai-compatible", baseUrl: "http://localhost:11434/v1", model: "local-model", keyConfigured: true }]);
   client.setQueryData(["admin", "failure-analysis"], { enableAll: false, providerId: null, enabledSince: null });
-  client.setQueryData(["failure-analysis-settings", "org-1"], [{ repository: { id: "repo-1", name: "repo", fullName: "workspace/repo", available: true }, settings: { enabled: false, providerId: acknowledgedProvider ? "provider-1" : null } }]);
+  client.setQueryData(["failure-analysis-settings", "org-1"], [{ repository: { id: "repo-1", name: "repo", fullName: "workspace/repo", available: true }, settings: { enabled: false, providerId: acknowledgedProvider ? "provider-1" : null }, prReview: { organizationId: "org-1", repositoryId: "repo-1", enabled: false, providerId: "provider-1", enabledSince: null, updatedAt: "2026-10-10T00:00:00.000Z" }, latestPrReview: null }]);
   return client;
 }
 
@@ -34,4 +34,18 @@ test("repository enabling is disabled until disclosure is acknowledged even with
   expect(repository?.disabled).toBe(true);
   expect(blanket?.disabled).toBe(true);
   expect(disclosure?.disabled).toBe(false);
+});
+
+test("PR review has separate opt-in and cannot be enabled by the CI setting", () => {
+  const window = new Window();
+  const client = fixture(true);
+  client.setQueryData(["admin", "failure-analysis"], { enableAll: true, providerId: "provider-1", enabledSince: "2026-10-10T00:00:00.000Z" });
+  window.document.body.innerHTML = markup(client);
+  const rows = [...window.document.querySelectorAll("tbody tr")];
+  const prReview = [...(rows[0]?.querySelectorAll("input") ?? [])].find(input => input.type === "checkbox" && input.parentElement?.textContent?.includes("Enable pull request review"));
+  const consent = [...window.document.querySelectorAll("input")].find(input => input.type === "checkbox" && input.parentElement?.textContent?.includes("I acknowledge"));
+  expect(rows[0]?.textContent).toContain("Enabled by Enable all");
+  expect(prReview?.checked).toBe(false);
+  expect(prReview?.disabled).toBe(true);
+  expect(consent?.disabled).toBe(false);
 });

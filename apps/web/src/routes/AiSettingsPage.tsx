@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { deleteLlmProvider, getGlobalFailureAnalysisSettings, getLlmProviders, getLlmProviderModels, getMe, getOrganizations, getRepositories, getRepositoryFailureAnalysisSettings, saveGlobalFailureAnalysisSettings, saveLlmProvider, saveRepositoryFailureAnalysisSettings, testLlmProvider } from "../api.ts";
+import { deleteLlmProvider, getGlobalFailureAnalysisSettings, getLlmProviders, getLlmProviderModels, getMe, getOrganizations, getRepositories, getRepositoryFailureAnalysisSettings, getRepositoryPrReviewSettings, getLatestPrReview, saveGlobalFailureAnalysisSettings, saveLlmProvider, saveRepositoryFailureAnalysisSettings, saveRepositoryPrReviewSettings, testLlmProvider } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
 import { AiTokenUsage } from "../components/AiTokenUsage.tsx";
 import { LlmProviderDefaultApiRoots, type LlmProviderKind } from "@mars/contracts";
@@ -26,10 +26,24 @@ async function getAllRepositories(organizationId: string) {
     items.push(...page.items);
     cursor = page.nextCursor;
   } while (cursor);
-  return Promise.all(items.map(async (repository) => ({ repository, settings: await getRepositoryFailureAnalysisSettings(organizationId, repository.id) })));
+  return Promise.all(items.map(async (repository) => ({
+    repository,
+    settings: await getRepositoryFailureAnalysisSettings(organizationId, repository.id),
+    prReview: await getRepositoryPrReviewSettings(organizationId, repository.id),
+    latestPrReview: await getLatestPrReview(organizationId, repository.id),
+  })));
 }
 
 const errorMessage = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message : fallback;
+function reviewScope(source: Record<string, unknown>) {
+  const rules = source.rules && typeof source.rules === "object" ? source.rules as Record<string, unknown> : {};
+  const coverage = source.coverage && typeof source.coverage === "object" ? source.coverage as Record<string, unknown> : {};
+  return {
+    rules: rules.status ? `${rules.status} · ${rules.path ?? ".mars/pr-rules.md"} · base ${String(rules.baseSha ?? "").slice(0, 12)}${rules.blobSha ? ` · blob ${String(rules.blobSha).slice(0, 12)}` : ""}` : "Not collected",
+    coverage: coverage.reviewableFiles !== undefined ? `${coverage.complete ? "Complete" : "Partial"} · ${coverage.reviewableFiles}/${coverage.changedFiles} files` : "Not collected",
+    limitations: Array.isArray(coverage.limitations) ? coverage.limitations.join("; ") : "",
+  };
+}
 
 export function AiSettingsPage() {
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
@@ -59,6 +73,7 @@ function AiSettings() {
   const [clearKey, setClearKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
+  const [prAcknowledged, setPrAcknowledged] = useState(false);
   const [saving, setSaving] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -84,6 +99,7 @@ function AiSettings() {
     void client.invalidateQueries({ queryKey: ["admin", "llm-providers"] });
     void client.invalidateQueries({ queryKey: ["admin", "failure-analysis"] });
     void Promise.all(organizations.map((organization) => client.invalidateQueries({ queryKey: ["failure-analysis-settings", organization.id] })));
+    void Promise.all(organizations.map((organization) => client.invalidateQueries({ queryKey: ["pr-review-settings", organization.id] })));
   };
   const resetForm = () => {
     setFormOpen(false); setEditingId(null); setName(""); setProviderType("lm-studio"); setBaseUrl(""); setModel(""); setApiKey(""); setClearKey(false);
@@ -96,7 +112,12 @@ function AiSettings() {
     onSuccess: invalidate,
     onError: (reason) => setError(errorMessage(reason, "Unable to save repository settings.")),
   });
-  const repositoryRows = repositories.flatMap((query, index) => (query.data ?? []).map((row) => ({ ...row, organizationId: organizations[index].id, workspace: organizations[index].login })));
+  const updatePrReview = useMutation({
+    mutationFn: ({ organizationId, repositoryId, enabled, providerId }: { organizationId: string; repositoryId: string; enabled: boolean; providerId: string | null }) => saveRepositoryPrReviewSettings(organizationId, repositoryId, { enabled, providerId }),
+    onSuccess: invalidate,
+    onError: (reason) => setError(errorMessage(reason, "Unable to save pull request review settings.")),
+  });
+  const repositoryRows = repositories.flatMap((query, index) => (query.data ?? []).map((row) => ({ ...row, organizationId: organizations[index].id, workspace: organizations[index].login, latestScope: row.latestPrReview ? reviewScope(row.latestPrReview.source) : null })));
   const selectedProviderIds = new Set(repositoryRows.map(({ settings }) => settings.providerId));
   const sharedProviderId = globalSettings.data?.providerId ?? (selectedProviderIds.size === 1 ? [...selectedProviderIds][0] ?? "" : "");
   const updateRepositories = useMutation({
@@ -182,17 +203,22 @@ function AiSettings() {
       </div>
       {selectedProviderIds.size > 1 && <p className="ai-warning">Repositories currently use different providers. Select one profile to apply it to all repositories.</p>}
       <label className="ai-checkbox ai-consent"><input type="checkbox" checked={acknowledged} disabled={accessBlocked || !providerReady} onChange={(event) => setAcknowledged(event.target.checked)} />I acknowledge failed log excerpts will be sent to the selected endpoint and generated feedback posted on associated pull requests.</label>
+      <div className="ai-warning"><strong>Pull request review is a separate opt-in.</strong> When enabled for a repository, source code and PR metadata—including private-repository content and changes originating from forks—are sent to that repository’s selected provider profile. Enabling is prospective: existing PRs are not backfilled; the next eligible PR event triggers review. MARS publishes advisory COMMENT reviews only; it never commits, pushes, applies suggestions, merges, or blocks CI.</div>
+      <label className="ai-checkbox ai-consent"><input type="checkbox" checked={prAcknowledged} disabled={accessBlocked || !providerRows.length} onChange={(event) => setPrAcknowledged(event.target.checked)} />I acknowledge source code and PR metadata, including private repositories and fork changes, will be sent to the selected PR review provider.</label>
       <QueryState isLoading={globalSettings.isLoading} error={globalSettings.error} retry={() => void globalSettings.refetch()} operationLabel="Enable all settings" />
+      <p className="form-help">PR review has its own opt-in and provider profile for each repository; CI failure-analysis settings do not enable it.</p>
       <QueryState isLoading={organizationsQuery.isLoading} error={organizationsQuery.error} retry={() => void organizationsQuery.refetch()} operationLabel="workspaces" />
       {!organizationsQuery.isLoading && !organizationsQuery.error && organizations.length === 0 && <p className="ai-empty">No accessible workspaces. Connect a GitHub installation in Settings first.</p>}
       {repositories.map((query, index) => <QueryState key={organizations[index].id} isLoading={query.isLoading} error={query.error} retry={() => void query.refetch()} operationLabel={`${organizations[index].login} repositories`} />)}
       <div className="ai-repository-table-wrap"><table className="ai-repository-table">
-        <thead><tr><th scope="col">Repository</th><th scope="col">Workspace</th><th scope="col">Status</th><th scope="col">Analysis</th></tr></thead>
-        <tbody>{repositoryRows.map(({ repository, settings, organizationId, workspace }) => <tr key={`${organizationId}:${repository.id}`}>
+        <thead><tr><th scope="col">Repository</th><th scope="col">Workspace</th><th scope="col">Status</th><th scope="col">Analysis</th><th scope="col">PR review</th><th scope="col">Latest PR review</th></tr></thead>
+        <tbody>{repositoryRows.map(({ repository, settings, prReview, latestPrReview, latestScope, organizationId, workspace }) => <tr key={`${organizationId}:${repository.id}`}>
           <th scope="row">{repository.fullName ?? repository.name}</th>
           <td>{workspace}</td>
           <td>{repository.available ? enableAll ? "Enabled by Enable all" : settings.enabled ? "Enabled" : "Disabled" : "Unavailable"}</td>
           <td><label className="ai-checkbox"><input type="checkbox" checked={settings.enabled} disabled={accessBlocked || (!settings.enabled && (!repository.available || !providerReady || !acknowledged))} onChange={(event) => { setError(null); updateSetting.mutate({ organizationId, repositoryId: repository.id, enabled: event.target.checked, providerId: settings.enabled ? settings.providerId : sharedProviderId }); }} /><span className="sr-only">Enable analysis for {repository.fullName ?? repository.name}</span></label></td>
+          <td><label className="ai-checkbox"><input type="checkbox" checked={prReview.enabled} disabled={accessBlocked || updatePrReview.isPending || (!prReview.enabled && (!repository.available || !providerRows.length || !prAcknowledged))} onChange={(event) => { setError(null); updatePrReview.mutate({ organizationId, repositoryId: repository.id, enabled: event.target.checked, providerId: prReview.providerId ?? providerRows[0]?.id ?? null }); }} /><span className="sr-only">Enable pull request review for {repository.fullName ?? repository.name}</span></label><label className="ai-provider-select">Provider<select value={prReview.providerId ?? ""} disabled={accessBlocked || updatePrReview.isPending} onChange={(event) => { setPrAcknowledged(false); updatePrReview.mutate({ organizationId, repositoryId: repository.id, enabled: prReview.enabled, providerId: event.target.value || null }); }}><option value="">Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label></td>
+          <td>{latestPrReview ? <><strong>PR #{latestPrReview.prNumber}</strong> · {latestPrReview.analysisState} / {latestPrReview.publicationState}<br />Revision <code>{latestPrReview.headSha.slice(0, 12)}</code><br />Rules: {latestScope?.rules} · <span title={latestScope?.limitations}>Coverage: {latestScope?.coverage}</span><br />Usage: {latestPrReview.inputTokens ?? "?"} in / {latestPrReview.outputTokens ?? "?"} out · ${latestPrReview.estimatedCostUsd?.toFixed(6) ?? "unknown"}<br />{latestPrReview.errorCode && <span role="alert">Error: {latestPrReview.errorCode}<br /></span>}{latestPrReview.reviewUrl && <a href={latestPrReview.reviewUrl} target="_blank" rel="noreferrer">View GitHub review</a>}</> : "No reviews yet"}</td>
         </tr>)}</tbody>
       </table></div>
       {!accessBlocked && organizations.length > 0 && repositoryRows.length === 0 && <p className="form-help">No repositories available.</p>}

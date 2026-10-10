@@ -257,6 +257,35 @@ export const RepositoryFailureAnalysisSettings = dto(strict({
   enabledSince: timestamp.nullable(),
 }));
 export type RepositoryFailureAnalysisSettings = z.infer<typeof RepositoryFailureAnalysisSettings>;
+export const PrReviewResult = dto(strict({
+  findings: z.array(strict({
+    path: z.string().min(1).max(1000),
+    line: z.number().int().positive(),
+    endLine: z.number().int().positive().nullable(),
+    severity: z.enum(["Critical", "High", "Medium", "Low"]),
+    confidencePercent: z.number().int().min(0).max(100),
+    evidence: z.string().min(1).max(4000),
+    impact: z.string().min(1).max(2000),
+    correction: z.string().min(1).max(2000),
+    suggestion: strict({ startLine: z.number().int().positive(), endLine: z.number().int().positive(), originalText: z.string().max(12000), replacementText: z.string().max(12000), rationale: z.string().min(1).max(2000) }).nullable(),
+  })).max(20),
+}));
+export type PrReviewResult = z.infer<typeof PrReviewResult>;
+export const RepositoryPrReviewSettings = dto(strict({ organizationId: id, repositoryId: id, enabled: z.boolean(), providerId: id.nullable(), enabledSince: timestamp.nullable(), updatedAt: timestamp }));
+export type RepositoryPrReviewSettings = z.infer<typeof RepositoryPrReviewSettings>;
+export const PrReviewSummary = strict({
+  id, organizationId: id, repositoryId: id, prNumber: positiveSafe, baseSha: z.string().min(1), headSha: z.string().min(1),
+  trigger: z.enum(["opened", "synchronize", "ready_for_review", "reopened", "review_command"]), commentId: tokenCount.nullable(), requester: z.string().nullable(),
+  providerId: id.nullable(), providerSnapshot: z.record(z.unknown()), settingsUpdatedAt: timestamp,
+  analysisState: z.enum(["pending", "running", "completed", "failed", "skipped", "superseded"]),
+  publicationState: z.enum(["pending", "publishing", "published", "failed", "unknown"]),
+  result: PrReviewResult.nullable(), source: z.record(z.unknown()), inputTokens: tokenCount.nullable(), outputTokens: tokenCount.nullable(),
+  estimatedCostUsd: tokenPrice.nullable(), errorCode: z.string().nullable(), reviewId: positiveSafe.nullable(), reviewUrl: z.string().url().nullable(),
+  providerCalledAt: timestamp.nullable(),
+  createdAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), publicationStartedAt: timestamp.nullable(),
+});
+export type PrReviewSummary = z.infer<typeof PrReviewSummary>;
+
 export const PipelineAnalysisResult = dto(strict({
   summary: z.string().max(2000),
   failures: z.array(strict({

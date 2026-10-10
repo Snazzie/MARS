@@ -2404,3 +2404,21 @@ test("LM Studio test failures explain missing models without exposing provider d
     message: expect.stringContaining("not downloaded"),
   });
 });
+
+test("PR review settings require organization access and global-admin mutation rights", async () => {
+  const path = "/api/organizations/org-1/repositories/repo-1/pr-review";
+  const inaccessible = createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "member", githubUserId: 1, login: "member", isGlobalAdmin: false }),
+    db: preparedTestDatabase(() => []),
+  }));
+  expect((await inaccessible.request(path)).status).toBe(404);
+  expect((await inaccessible.request(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true, providerId: "11111111-1111-4111-8111-111111111111" }) })).status).toBe(404);
+
+  const member = createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "member", githubUserId: 1, login: "member", isGlobalAdmin: false }),
+    db: preparedTestDatabase(name => name === "route_membership" ? [{ allowed: 1 }] : name === "route_pr_review_repository" ? [{ id: "repo-1" }] : []),
+  }));
+  const denied = await member.request(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true, providerId: "11111111-1111-4111-8111-111111111111" }) });
+  expect(denied.status).toBe(403);
+});
+

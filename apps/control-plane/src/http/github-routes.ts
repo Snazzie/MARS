@@ -5,6 +5,8 @@ import type { ControlPlaneEnv, ControlPlaneHttpDeps } from "./types.ts";
 import { readBody, validSignature, acceptDelivery, completeDelivery, failDelivery } from "../webhook.ts";
 import { applyWorkflowJobWebhook, type WorkflowJobPayload } from "../runs.ts";
 import { browserLocation } from "../http-origin.ts";
+import { parsePrReviewEvent } from "../pr-review-webhook.ts";
+import { handlePrReviewWebhook } from "../pr-review.ts";
 
 const setupFailure = (cause: unknown): string | null => {
   const code = cause instanceof Error ? cause.message : "";
@@ -105,6 +107,14 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
     try {
       if (deps.githubApp && (eventName === "installation" || eventName === "installation_repositories")) await deps.githubApp.reconcileInstallationRepositories(payload);
       const ingested = eventName === "workflow_job" && event.action && event.workflow_job ? await applyWorkflowJobWebhook(event) : null;
+      if (deps.githubApp && deps.llmProviders && (eventName === "pull_request" || eventName === "issue_comment")) {
+        const prEvent = parsePrReviewEvent(eventName, payload);
+        if (prEvent) await handlePrReviewWebhook({
+          db: deps.db,
+          installationToken: (id) => deps.githubApp!.getInstallationToken(id),
+          providerConfig: (id) => deps.llmProviders!.config(id),
+        }, eventName, payload, deliveryId);
+      }
       await completeDelivery(deps.db, deliveryId);
       if (eventName === "workflow_job" && event.action === "queued") console.log("Queued GitHub job webhook", { deliveryId, installationId, repository: event.repository?.full_name, runId: event.workflow_job?.run_id, jobId: event.workflow_job?.id, queuedAt: event.workflow_job?.created_at, ingested });
     } catch (error) {
