@@ -2386,3 +2386,21 @@ test("AI work is authenticated and inaccessible workspace work returns not found
     expect((await memberApp.request(`/api/organizations/all/ai-work${query}`)).status).toBe(400);
   }
 });
+
+test("LM Studio test failures explain missing models without exposing provider details", async () => {
+  const service = new LlmProvidersService(new SecretBox(Buffer.alloc(32, 5).toString("base64")), {
+    list: async () => [],
+    get: async () => ({ name: "Studio", kind: "lm-studio", baseUrl: "http://studio.test/v1", model: "not-downloaded" }),
+    save: async input => input, delete: async () => {},
+  }, async () => Response.json({ models: [] }));
+  const endpoint = createControlPlaneApp(fakeHttpDeps({
+    currentUser: async () => ({ id: "operator", githubUserId: 1, login: "operator", isGlobalAdmin: true }),
+    llmProviders: service,
+  }));
+  const response = await endpoint.request("/api/admin/llm/providers/profile/test", { method: "POST" });
+  expect(response.status).toBe(502);
+  expect(await response.json()).toMatchObject({
+    code: "llm_model_not_found",
+    message: expect.stringContaining("not downloaded"),
+  });
+});

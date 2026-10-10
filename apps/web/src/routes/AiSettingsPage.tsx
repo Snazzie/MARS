@@ -3,20 +3,19 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { deleteLlmProvider, getGlobalFailureAnalysisSettings, getLlmProviders, getLlmProviderModels, getMe, getOrganizations, getRepositories, getRepositoryFailureAnalysisSettings, saveGlobalFailureAnalysisSettings, saveLlmProvider, saveRepositoryFailureAnalysisSettings, testLlmProvider } from "../api.ts";
 import { QueryState } from "../components/StateView.tsx";
 import { AiTokenUsage } from "../components/AiTokenUsage.tsx";
-import { LlmProviderDefaultApiRoots } from "@mars/contracts";
+import { LlmProviderDefaultApiRoots, type LlmProviderKind } from "@mars/contracts";
 
 const providerTypes = {
-  "lm-studio": { label: "LM Studio", kind: "openai-compatible", baseUrl: "http://localhost:1234/v1" },
+  "lm-studio": { label: "LM Studio", kind: "lm-studio", baseUrl: LlmProviderDefaultApiRoots["lm-studio"] },
   ollama: { label: "Ollama", kind: "openai-compatible", baseUrl: LlmProviderDefaultApiRoots["openai-compatible"] },
   "openai-compatible": { label: "OpenAI-compatible", kind: "openai-compatible", baseUrl: "https://api.openai.com/v1" },
   anthropic: { label: "Anthropic", kind: "anthropic", baseUrl: LlmProviderDefaultApiRoots.anthropic },
 } as const;
 type ProviderType = keyof typeof providerTypes;
 
-function providerTypeFor(provider: { kind: "openai-compatible" | "anthropic"; baseUrl: string }): ProviderType {
-  if (provider.kind === "anthropic") return "anthropic";
-  const port = new URL(provider.baseUrl).port;
-  return port === "1234" ? "lm-studio" : port === "11434" ? "ollama" : "openai-compatible";
+function providerTypeFor(provider: { kind: LlmProviderKind; baseUrl: string }): ProviderType {
+  if (provider.kind !== "openai-compatible") return provider.kind;
+  return new URL(provider.baseUrl).port === "11434" ? "ollama" : "openai-compatible";
 }
 
 async function getAllRepositories(organizationId: string) {
@@ -69,11 +68,11 @@ function AiSettings() {
   const localProvider = providerType === "lm-studio" || providerType === "ollama";
   useEffect(() => {
     setAvailableModels([]); setModelsError(null); setModelsLoading(false);
-    if (!formOpen || kind !== "openai-compatible") return;
+    if (!formOpen || kind === "anthropic") return;
     const controller = new AbortController();
     setModelsLoading(true);
     const timer = setTimeout(() => {
-      void getLlmProviderModels({ baseUrl: effectiveBaseUrl, ...(editingId ? { providerId: editingId } : {}), ...(apiKey ? { apiKey } : clearKey ? { apiKey: null } : {}) }, controller.signal)
+      void getLlmProviderModels({ kind, baseUrl: effectiveBaseUrl, ...(editingId ? { providerId: editingId } : {}), ...(apiKey ? { apiKey } : clearKey ? { apiKey: null } : {}) }, controller.signal)
         .then(({ models }) => { if (!controller.signal.aborted) setAvailableModels(models); })
         .catch((reason) => { if (!controller.signal.aborted) setModelsError(errorMessage(reason, "Unable to list models. Enter a model ID manually.")); })
         .finally(() => { if (!controller.signal.aborted) setModelsLoading(false); });
@@ -140,8 +139,9 @@ function AiSettings() {
         <dl className="ai-provider-details"><div><dt>Model</dt><dd>{provider.model}</dd></div><div><dt>API root</dt><dd>{provider.baseUrl}</dd></div></dl>
         <p className="form-help">{provider.keyConfigured ? "API key configured" : "No API key configured"}</p>
         {provider.baseUrl.startsWith("http://") && <p className="ai-warning">Warning: HTTP does not encrypt traffic to this provider.</p>}
-        {test.variables === provider.id && test.isSuccess && <p role="status" className="ai-success">Connection verified.</p>}
-        <div className="settings-actions"><button className="button secondary" type="button" disabled={saving} onClick={() => { setEditingId(provider.id); setName(provider.name); setProviderType(providerTypeFor(provider)); setBaseUrl(provider.baseUrl); setModel(provider.model); setApiKey(""); setInputPrice(provider.inputUsdPerMillionTokens == null ? "" : String(provider.inputUsdPerMillionTokens)); setOutputPrice(provider.outputUsdPerMillionTokens == null ? "" : String(provider.outputUsdPerMillionTokens)); setClearKey(false); setFormOpen(true); }}>Edit</button><button className="button secondary" type="button" onClick={() => { setError(null); test.mutate(provider.id); }} disabled={test.isPending}>{test.isPending && test.variables === provider.id ? "Testing…" : "Test connection"}</button><button className="button secondary" type="button" onClick={() => { setError(null); remove.mutate(provider.id); }} disabled={remove.isPending || saving}>Delete</button></div>
+        {test.variables === provider.id && test.isSuccess && <p role="status" className="ai-success">Model verified: generated and validated a test analysis.</p>}
+        {test.variables === provider.id && test.isPending && <p role="status" className="form-help">{provider.kind === "lm-studio" ? "Checking the model, loading it if needed, then generating a test analysis…" : "Generating a test analysis…"}</p>}
+        <div className="settings-actions"><button className="button secondary" type="button" disabled={saving} onClick={() => { test.reset(); setEditingId(provider.id); setName(provider.name); setProviderType(providerTypeFor(provider)); setBaseUrl(provider.baseUrl); setModel(provider.model); setApiKey(""); setInputPrice(provider.inputUsdPerMillionTokens == null ? "" : String(provider.inputUsdPerMillionTokens)); setOutputPrice(provider.outputUsdPerMillionTokens == null ? "" : String(provider.outputUsdPerMillionTokens)); setClearKey(false); setFormOpen(true); }}>Edit</button><button className="button secondary" type="button" onClick={() => { setError(null); test.mutate(provider.id); }} disabled={test.isPending || saving}>{test.isPending && test.variables === provider.id ? "Testing model…" : "Test model"}</button><button className="button secondary" type="button" onClick={() => { setError(null); remove.mutate(provider.id); }} disabled={remove.isPending || saving}>Delete</button></div>
       </article>)}</div>
       {formOpen && <form onSubmit={submit} className="ai-provider-form" aria-labelledby="ai-provider-form-title">
         <h3 id="ai-provider-form-title">{editingId ? "Edit provider" : "Add provider"}</h3>
@@ -149,14 +149,14 @@ function AiSettings() {
           <label>Profile name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Local development" /></label>
           <label>Provider type<select value={providerType} onChange={(event) => { setProviderType(event.target.value as ProviderType); setBaseUrl(""); setModel(""); setApiKey(""); setInputPrice(""); setOutputPrice(""); setClearKey(!!editingId); }}>{Object.entries(providerTypes).map(([value, provider]) => <option key={value} value={value}>{provider.label}</option>)}</select></label>
           <label>API root<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={defaultBaseUrl} /><span className="form-help">Leave blank to use {defaultBaseUrl}.</span></label>
-          {(kind !== "openai-compatible" || availableModels.length === 0) && <label>Model ID<input required value={model} onChange={(event) => setModel(event.target.value)} placeholder="Enter a model ID" /></label>}
+          {(kind === "anthropic" || availableModels.length === 0) && <label>Model ID<input required value={model} onChange={(event) => setModel(event.target.value)} placeholder="Enter a model ID" /></label>}
           <label className="ai-form-wide">API key<input type="password" autoComplete="new-password" value={apiKey} onChange={(event) => { setApiKey(event.target.value); setClearKey(false); }} placeholder={editingId ? "Leave blank to keep current key" : kind === "anthropic" ? "Required for Anthropic" : "Optional for local servers"} /></label>
           {!localProvider && <>
             <label>Input price (USD / million tokens)<input type="number" min="0" step="any" value={inputPrice} onChange={(event) => setInputPrice(event.target.value)} placeholder="Leave blank if unknown" /></label>
             <label>Output price (USD / million tokens)<input type="number" min="0" step="any" value={outputPrice} onChange={(event) => setOutputPrice(event.target.value)} placeholder="Leave blank if unknown" /></label>
           </>}
         </div>
-        {kind === "openai-compatible" && <div className="ai-model-lookup">
+        {kind !== "anthropic" && <div className="ai-model-lookup">
           <div className="settings-actions"><button className="button secondary" type="button" disabled={modelsLoading} onClick={() => setModelLookupRevision((value) => value + 1)}>{modelsLoading ? "Loading models…" : "Refresh models"}</button>
             {availableModels.length > 0 && <label className="ai-provider-select">Available models<select required value={model} onChange={(event) => setModel(event.target.value)}><option value="">Choose a model</option>{model && !availableModels.includes(model) && <option value={model}>{model}</option>}{availableModels.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>}
           </div>
@@ -168,6 +168,7 @@ function AiSettings() {
         </div>}
         <p className="form-help">{localProvider ? "Local providers have $0 API cost." : "Cost estimates use these prices and provider-reported token counts. Leave unknown prices blank; unpriced requests are not treated as free."}</p>
         <p className="form-help">Local endpoints must be reachable from the control-plane host or container, not your browser.</p>
+        {providerType === "lm-studio" && <p className="form-help">MARS checks loaded instances and loads this downloaded model before each analysis. JIT loading is not required. Save the provider, then use Test model to verify loading and generation. Requires LM Studio’s /api/v1 model-management API.</p>}
         {effectiveBaseUrl.startsWith("http://") && <p className="ai-warning">Warning: HTTP traffic is not encrypted.</p>}
         {editingId && <label className="ai-checkbox"><input type="checkbox" checked={clearKey} onChange={(event) => { setClearKey(event.target.checked); setApiKey(""); }} />Clear configured API key</label>}
         <div className="settings-actions"><button className="button" type="submit" disabled={saving}>{saving ? "Saving…" : "Save provider"}</button><button className="button secondary" type="button" disabled={saving} onClick={resetForm}>Cancel</button></div>

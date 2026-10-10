@@ -330,6 +330,9 @@ export function createControlPlaneGateway(options: GatewayOptions) {
   async function fetch(request: Request, server: GatewayServer): Promise<Response | undefined> {
     const url = new URL(request.url);
     options.requestSource(request, server);
+    // Model tests can cold-load for three minutes before their inference deadline.
+    // Keep this request open; the provider service owns the operation timeouts.
+    if (request.method === "POST" && /^\/api\/admin\/llm\/providers\/[^/]+\/test$/.test(url.pathname)) server.timeout(request, 0);
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket" && url.pathname === "/api/browser/invalidations") {
       try {
         const user = await options.current(request);

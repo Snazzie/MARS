@@ -71,7 +71,7 @@ export interface PipelineFailureAnalysisDeps {
 
 function safeErrorCode(error: unknown): string {
   const code = error instanceof Error ? error.message : "";
-  if (["llm_timeout", "llm_auth_failed", "llm_rate_limited", "llm_unavailable", "llm_invalid_response"].includes(code)) return code;
+  if (["llm_timeout", "llm_auth_failed", "llm_rate_limited", "llm_unavailable", "llm_invalid_response", "llm_model_not_found", "llm_model_load_failed"].includes(code)) return code;
   if (code === "analysis_logs_unavailable" || code === "analysis_no_failed_jobs" || code === "analysis_interrupted") return code;
   if (/^github_403$/.test(code)) return "github_app_permissions_missing";
   if (/^github_(?:401|404|410|422)$/.test(code)) return code;

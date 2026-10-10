@@ -182,7 +182,21 @@ export function registerDashboardRoutes(app: Hono<ControlPlaneEnv>, deps: Contro
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");
     if (!deps.llmProviders) return providerUnavailable(c);
     try { await deps.llmProviders.test(c.req.param("providerId")); return c.json({ ok: true }, 200, { "cache-control": "no-store" }); }
-    catch (cause) { if (cause instanceof Error && cause.message === "llm_provider_not_found") return error(c, 404, "not_found", "Provider not found"); if (cause instanceof Error && /^llm_/.test(cause.message)) return error(c, 502, cause.message, "Provider test failed"); throw cause; }
+    catch (cause) {
+      if (cause instanceof Error && cause.message === "llm_provider_not_found") return error(c, 404, "not_found", "Provider not found");
+      if (cause instanceof Error && /^llm_/.test(cause.message)) {
+        const messages: Record<string, string> = {
+          llm_model_not_found: "The selected model is not downloaded in LM Studio or is not a text-generation model. Download it and check the model ID.",
+          llm_model_load_failed: "LM Studio could not load the selected model. Check available memory and LM Studio’s server logs.",
+          llm_auth_failed: "Provider authentication failed. Check the API key and model-management permissions.",
+          llm_timeout: "Model loading or test generation timed out. Check LM Studio’s server logs and available resources.",
+          llm_unavailable: "The provider is unavailable. Check its server and the address reachable from the control plane.",
+          llm_invalid_response: "The provider returned an invalid model-management response or analysis. LM Studio requires the /api/v1 model-management API.",
+        };
+        return error(c, 502, cause.message, messages[cause.message] ?? "Provider test failed");
+      }
+      throw cause;
+    }
   }));
   app.get("/api/admin/llm/failure-analysis", safe(async (c) => {
     if (!c.get("user").isGlobalAdmin) return error(c, 403, "forbidden", "Global administrator authorization required");

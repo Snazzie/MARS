@@ -1,0 +1,2 @@
+ALTER TABLE "llm_providers" DROP CONSTRAINT "llm_providers_kind_check";--> statement-breakpoint
+ALTER TABLE "llm_providers" ADD CONSTRAINT "llm_providers_kind_check" CHECK (kind = ANY (ARRAY['openai-compatible'::text, 'lm-studio'::text, 'anthropic'::text]));

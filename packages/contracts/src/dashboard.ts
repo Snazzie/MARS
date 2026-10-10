@@ -182,16 +182,18 @@ export const ActionGraph = dto(strict({
   edges: z.array(strict({ from: id, to: id })),
 }));
 export type ActionGraph = z.infer<typeof ActionGraph>;
-export const LlmProviderKind = z.enum(["openai-compatible", "anthropic"]);
+export const LlmProviderKind = z.enum(["openai-compatible", "lm-studio", "anthropic"]);
 export type LlmProviderKind = z.infer<typeof LlmProviderKind>;
 const tokenCount = z.number().int().nonnegative().safe();
 const tokenPrice = z.number().nonnegative().finite().max(99_999_999);
 export const LlmProviderDefaultApiRoots = {
   "openai-compatible": "http://localhost:11434/v1",
+  "lm-studio": "http://localhost:1234/v1",
   anthropic: "https://api.anthropic.com/v1",
 } as const;
 export const LlmProviderModelLookupRequest = strict({
   baseUrl: z.string().trim().pipe(z.string().url().or(z.literal(""))),
+  kind: LlmProviderKind.exclude(["anthropic"]).optional(),
   providerId: id.optional(),
   apiKey: z.string().min(1).nullable().optional(),
 });

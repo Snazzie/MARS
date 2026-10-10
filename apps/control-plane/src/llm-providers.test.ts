@@ -100,3 +100,75 @@ test("model lookup rejects malformed listings without exposing provider response
   }, async () => new Response("secret internal provider error"));
   await expect(service.models({ baseUrl: "" })).rejects.toThrow("llm_invalid_response");
 });
+
+test("LM Studio cold-loads once, reuses its instance, and reloads after eviction", async () => {
+  let loaded = false;
+  let loads = 0;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      if (request.headers.get("authorization") !== "Bearer studio-key") return new Response(null, { status: 401 });
+      const path = new URL(request.url).pathname;
+      if (path === "/proxy/api/v1/models") return Response.json({ models: [
+        { type: "llm", key: "downloaded-model", loaded_instances: loaded ? [{ id: "instance-1" }] : [] },
+      ] });
+      if (path === "/proxy/api/v1/models/load") {
+        const body = await request.json();
+        if (body.model !== "downloaded-model") return new Response(null, { status: 400 });
+        loads++; loaded = true;
+        return Response.json({ type: "llm", status: "loaded", instance_id: "instance-1" });
+      }
+      if (path === "/proxy/v1/chat/completions") {
+        const body = await request.json();
+        if (!loaded || body.model !== "instance-1") return new Response(null, { status: 400 });
+        return Response.json({ choices: [{ message: { content: JSON.stringify(valid) } }] });
+      }
+      return new Response(null, { status: 404 });
+    },
+  });
+  const provider: LlmProviderConfig = { name: "Studio", kind: "lm-studio", baseUrl: `${server.url}proxy/v1`, model: "downloaded-model", encryptedApiKey: "studio-key" };
+  try {
+    expect(await generatePipelineAnalysis({ provider, context })).toEqual(valid);
+    expect(loads).toBe(1);
+    expect(await generatePipelineAnalysis({ provider, context })).toEqual(valid);
+    expect(loads).toBe(1);
+    expect(await generatePipelineAnalysis({ provider: { ...provider, model: "instance-1" }, context })).toEqual(valid);
+    expect(loads).toBe(1);
+    loaded = false;
+    expect(await generatePipelineAnalysis({ provider, context })).toEqual(valid);
+    expect(loads).toBe(2);
+  } finally { server.stop(true); }
+});
+
+test("LM Studio refuses missing, non-LLM, failed, and malformed loads before inference", async () => {
+  const provider: LlmProviderConfig = { name: "Studio", kind: "lm-studio", baseUrl: "http://studio.test/v1", model: "model" };
+  const scenarios = [
+    { models: [], load: {}, status: 200, error: "llm_model_not_found" },
+    { models: [{ type: "embedding", key: "model", loaded_instances: [] }], load: {}, status: 200, error: "llm_model_not_found" },
+    { models: [{ type: "llm", key: "model", loaded_instances: [] }], load: { secret: "private failure" }, status: 500, error: "llm_model_load_failed" },
+    { models: [{ type: "llm", key: "model", loaded_instances: [] }], load: {}, status: 401, error: "llm_auth_failed" },
+    { models: [{ type: "llm", key: "model", loaded_instances: [] }], load: { type: "llm", status: "loading", instance_id: "model" }, status: 200, error: "llm_invalid_response" },
+  ];
+  for (const scenario of scenarios) {
+    let inferenceCalls = 0;
+    await expect(generatePipelineAnalysis({ provider, context }, async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/chat/completions")) { inferenceCalls++; return Response.json({}); }
+      if (path.endsWith("/load")) return Response.json(scenario.load, { status: scenario.status });
+      return Response.json({ models: scenario.models });
+    })).rejects.toThrow(scenario.error);
+    expect(inferenceCalls).toBe(0);
+  }
+});
+
+test("LM Studio model discovery includes unloaded LLMs but excludes embedding and decision models", async () => {
+  const service = new LlmProvidersService(new SecretBox(Buffer.alloc(32, 5).toString("base64")), {
+    list: async () => [], get: async () => null, save: async (input) => input, delete: async () => {},
+  }, async () => Response.json({ models: [
+    { type: "llm", key: "unloaded", loaded_instances: [] },
+    { type: "embedding", key: "embedding", loaded_instances: [] },
+    { type: "decision", key: "decision", loaded_instances: [] },
+    { type: "llm", key: "loaded", loaded_instances: [{ id: "instance" }] },
+  ] }));
+  expect(await service.models({ kind: "lm-studio", baseUrl: "" })).toEqual(["loaded", "unloaded"]);
+});

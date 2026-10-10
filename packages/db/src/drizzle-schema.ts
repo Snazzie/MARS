@@ -416,7 +416,7 @@ export const llmProviders = pgTable("llm_providers", {
 	encryptedApiKey: text("encrypted_api_key"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (table) => [check("llm_providers_kind_check", sql`kind = ANY (ARRAY['openai-compatible'::text, 'anthropic'::text])`)]);
+}, (table) => [check("llm_providers_kind_check", sql`kind = ANY (ARRAY['openai-compatible'::text, 'lm-studio'::text, 'anthropic'::text])`)]);
 
 export const globalFailureAnalysisSettings = pgTable("global_failure_analysis_settings", {
 	singleton: boolean().default(true).primaryKey().notNull(),
