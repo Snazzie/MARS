@@ -113,6 +113,13 @@ Dashboard recovery and navigation:
   Historical runs, missing/invalid usage, and requests without a usable response
   retain `null` throughput. The additive migration preserves existing rows; roll back
   application code without dropping the columns to retain collected metrics.
+  Pipeline analysis generation states the result limits explicitly: at most 20
+  failures, 3 evidence excerpts per failure, 500 characters per excerpt, and 2000
+  characters each for summary, explanation, and suggested fix. LM Studio requests
+  additionally use `response_format: json_schema`, generated from the same Zod
+  result schema used for validation. Other providers retain their existing wire
+  protocol. Invalid output is still rejected, never silently truncated; historical
+  failed analyses are not automatically replayed.
 - Overview starts with time-window controls and the dispatcher card, without the
   introductory title block or Live workload panel. Six summary metrics use one row
   on wide screens, three columns on tablets, and two on phones.

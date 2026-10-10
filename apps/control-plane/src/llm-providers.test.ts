@@ -50,6 +50,19 @@ test("captures reported usage before rejecting invalid generated JSON and ignore
   expect(usage[1]).toBeNull();
 });
 
+test("pipeline analysis accepts three evidence excerpts without truncation and rejects a fourth", async () => {
+  const provider: LlmProviderConfig = { name: "local", kind: "openai-compatible", baseUrl: "http://localhost/v1", model: "model" };
+  const evidence = ["First assertion failed", "Expected value was 2", "Actual value was 3"];
+  const result = { ...valid, failures: [{ ...valid.failures[0]!, evidence }] };
+  expect(await generatePipelineAnalysis({ provider, context }, async () => Response.json({
+    choices: [{ message: { content: JSON.stringify(result) } }],
+  }))).toEqual(result);
+  const oversized = { ...result, failures: [{ ...result.failures[0]!, evidence: [...evidence, "Fourth excerpt"] }] };
+  await expect(generatePipelineAnalysis({ provider, context }, async () => Response.json({
+    choices: [{ message: { content: JSON.stringify(oversized) } }],
+  }))).rejects.toThrow("llm_invalid_response");
+});
+
 test("throughput uses output tokens and includes response body time but excludes request bookkeeping", async () => {
   let clock = 0;
   const timer = spyOn(performance, "now").mockImplementation(() => clock);
