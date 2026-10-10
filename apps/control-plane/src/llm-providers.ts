@@ -1,8 +1,20 @@
 import { PrReviewResult, LlmProviderDefaultApiRoots, type LlmProviderModelLookupRequest } from "@mars/contracts";
 import { z } from "zod";
 import type { SecretBox } from "./auth.ts";
+import { LMStudioClient, type BaseLoadModelOpts, type LLMLoadModelConfig } from "@lmstudio/sdk";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit & { timeout?: number | false }) => Promise<Response>;
+type StudioModel = { identifier: string; getLoadConfig(): Promise<LLMLoadModelConfig> };
+type StudioClient = {
+  llm: { model(key: string, options: BaseLoadModelOpts<LLMLoadModelConfig>): Promise<StudioModel> };
+  [Symbol.asyncDispose](): Promise<void>;
+};
+type StudioClientFactory = (baseUrl: string, apiToken: string | null) => StudioClient;
+const createStudioClient: StudioClientFactory = (baseUrl, apiToken) => {
+  // Profile credentials are authoritative; never send an ambient SDK token.
+  if (!apiToken && process.env.LM_API_TOKEN) throw new Error("llm_auth_failed");
+  return new LMStudioClient({ baseUrl, ...(apiToken ? { apiToken } : {}) });
+};
 
 export const PipelineAnalysisResult = z.object({
   summary: z.string().max(2000),
@@ -160,9 +172,10 @@ const lmStudioModels = z.object({
   })).max(1000),
 });
 
-async function ensureLmStudioModel(root: string, model: string, headers: Headers, fetcher: Fetcher): Promise<string> {
+async function ensureLmStudioModel(root: string, model: string, headers: Headers, fetcher: Fetcher, factory: StudioClientFactory = createStudioClient): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MODEL_LOAD_TIMEOUT_MS);
+  let client: StudioClient | undefined;
   try {
     const endpoint = lmStudioModelsEndpoint(root);
     const response = await fetcher(endpoint, { headers, signal: controller.signal, redirect: "error" });
@@ -172,20 +185,28 @@ async function ensureLmStudioModel(root: string, model: string, headers: Headers
     const selected = listing.data.models.find((item) => item.type === "llm" && (item.key === model || item.loaded_instances.some((instance) => instance.id === model)));
     if (!selected) throw new Error("llm_model_not_found");
     const loaded = selected.loaded_instances.find((instance) => instance.id === model) ?? selected.loaded_instances[0];
-    if (loaded) return loaded.id;
-    const load = await fetcher(`${endpoint}/load`, {
-      method: "POST", headers, body: JSON.stringify({ model: selected.key }), signal: controller.signal, redirect: "error",
+    const apiToken = headers.get("authorization")?.slice("Bearer ".length) ?? null;
+    client = factory(root.slice(0, -3).replace(/^http/, "ws"), apiToken);
+    const aborted = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener("abort", () => reject(new Error("llm_timeout")), { once: true });
     });
-    if (!load.ok) throw new Error(load.status === 401 || load.status === 403 ? "llm_auth_failed" : "llm_model_load_failed");
-    const result = z.object({ type: z.literal("llm"), status: z.literal("loaded"), instance_id: z.string().min(1).max(200) })
-      .safeParse(JSON.parse(await readCappedResponse(load)));
-    if (!result.success) throw new Error("llm_invalid_response");
-    return result.data.instance_id;
+    return await Promise.race([aborted, (async () => {
+      const instance = await client!.llm.model(loaded?.id ?? selected.key, {
+        signal: controller.signal,
+        config: { gpu: { ratio: 1, numCpuExpertLayersRatio: "off" }, gpuStrictVramCap: false, autoFit: false },
+      });
+      const config = await instance.getLoadConfig();
+      if (![1, "max"].includes(config.gpu?.ratio ?? "") || ![undefined, 0, "off"].includes(config.gpu?.numCpuExpertLayersRatio) || config.gpuStrictVramCap !== false || config.autoFit === true) throw new Error("llm_model_load_failed");
+      return z.string().min(1).max(200).parse(instance.identifier);
+    })()]);
   } catch (cause) {
     if (controller.signal.aborted) throw new Error("llm_timeout");
     if (cause instanceof Error && /^llm_/.test(cause.message)) throw cause;
-    throw new Error(cause instanceof SyntaxError ? "llm_invalid_response" : "llm_unavailable");
-  } finally { clearTimeout(timeout); }
+    throw new Error(cause instanceof SyntaxError || cause instanceof z.ZodError ? "llm_invalid_response" : "llm_model_load_failed");
+  } finally {
+    clearTimeout(timeout);
+    await client?.[Symbol.asyncDispose]();
+  }
 }
 
 async function requestProvider(input: {
@@ -195,6 +216,7 @@ async function requestProvider(input: {
   secretBox?: SecretBox;
   onRequest?: () => void | Promise<void>;
   onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void>;
+  studioClientFactory?: StudioClientFactory;
 }, fetcher: Fetcher): Promise<string> {
   const provider = input.provider;
   const root = validateProviderApiRoot(provider.baseUrl);
@@ -210,7 +232,7 @@ async function requestProvider(input: {
     body = { model: provider.model, max_tokens: 4096, system: input.systemPrompt, messages: [{ role: "user", content: context }] };
   } else {
     if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
-    const model = provider.kind === "lm-studio" ? await ensureLmStudioModel(root, provider.model, headers, fetcher) : provider.model;
+    const model = provider.kind === "lm-studio" ? await ensureLmStudioModel(root, provider.model, headers, fetcher, input.studioClientFactory) : provider.model;
     body = { model, max_tokens: 4096, messages: [{ role: "system", content: input.systemPrompt }, { role: "user", content: context }] };
   }
   const controller = new AbortController();
@@ -240,6 +262,7 @@ export async function generatePrReview(input: {
   secretBox?: SecretBox;
   onRequest?: () => void | Promise<void>;
   onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void>;
+  studioClientFactory?: StudioClientFactory;
 }, fetcher: Fetcher = fetch): Promise<PrReviewResult> {
   let eligibilityError: Error | null = null;
   const captureEligibilityError = (error: unknown) => {
@@ -274,6 +297,7 @@ export async function generatePipelineAnalysis(input: {
   secretBox?: SecretBox;
   onRequest?: () => void | Promise<void>;
   onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void>;
+  studioClientFactory?: StudioClientFactory;
 }, fetcher: Fetcher = fetch): Promise<PipelineAnalysisResult> {
   const content = await requestProvider({ ...input, context: JSON.stringify(input.context), systemPrompt }, fetcher);
   const result = parseResult(content);

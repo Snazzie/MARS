@@ -132,6 +132,18 @@ provider and that evidence-grounded AI suggestions may be published to associate
 pull requests by the installed MARS GitHub App. Only newly completed failures
 after opt-in are analyzed; no historical backfill or automatic retry is performed.
 
+LM Studio profiles use the native server's model-discovery HTTP API and the official
+SDK's WebSocket model-management endpoint at the same API root (remove `/v1` and use
+`ws`/`wss`; reverse-proxy prefixes are preserved). Expose both routes to the control
+plane. Generation remains OpenAI-compatible HTTP. Authentication uses the saved
+profile's native LM Studio token, not an ambient `LM_API_TOKEN`.
+Automatic loading requests full GPU weight offload, disables CPU expert offload,
+VRAM-cap fallback, and automatic fitting. It preserves other operator load settings.
+The effective load configuration is checked before sending logs or source for
+inference. Existing partial-offload or capped instances fail visibly; MARS does not
+unload or replace them. Insufficient GPU memory is a load failure, not permission to
+silently fall back to CPU. Load a fitting model with full offload in LM Studio.
+
 
 Pull-request review has independent repository opt-in and **Enable all PR reviews**
 controls in **Settings**; CI failure-analysis enablement never enables it.

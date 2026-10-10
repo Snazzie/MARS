@@ -9,6 +9,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@lmstudio/sdk": "^2.0.0",
     "@mars/contracts": "workspace:*",
     "@mars/db": "workspace:*",
     "drizzle-orm": "^0.45.2",

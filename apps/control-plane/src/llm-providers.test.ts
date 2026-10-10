@@ -1,6 +1,7 @@
 import { SecretBox } from "./auth.ts";
 import { expect, test } from "bun:test";
 import { LlmProvidersService, generatePipelineAnalysis, generatePrReview, sanitizeProviderText, validateProviderApiRoot, type LlmProviderConfig } from "./llm-providers.ts";
+import type { LLMLoadModelConfig } from "@lmstudio/sdk";
 
 const context = { run: { workflow: "test", attempt: 1 }, failedJobs: [{ jobId: 42, steps: [{ stepNumber: 3, name: "assert", excerpt: "AssertionError: expected 2 but got 3" }] }] };
 const valid = { summary: "Assertion failed", failures: [{ jobId: 42, stepNumber: 3, explanation: "The expected value differs.", evidence: ["expected 2 but got 3"], suggestedFix: "Update the expected value." }] };
@@ -104,6 +105,14 @@ test("model lookup rejects malformed listings without exposing provider response
 test("LM Studio cold-loads once, reuses its instance, and reloads after eviction", async () => {
   let loaded = false;
   let loads = 0;
+  let config: LLMLoadModelConfig = {};
+  const studioClientFactory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
+    llm: { model: async (_key, options) => {
+      if (!loaded) { loads++; loaded = true; config = options.config ?? {}; }
+      return { identifier: "instance-1", getLoadConfig: async () => config };
+    } },
+    async [Symbol.asyncDispose]() {},
+  });
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -112,12 +121,6 @@ test("LM Studio cold-loads once, reuses its instance, and reloads after eviction
       if (path === "/proxy/api/v1/models") return Response.json({ models: [
         { type: "llm", key: "downloaded-model", loaded_instances: loaded ? [{ id: "instance-1" }] : [] },
       ] });
-      if (path === "/proxy/api/v1/models/load") {
-        const body = await request.json();
-        if (body.model !== "downloaded-model") return new Response(null, { status: 400 });
-        loads++; loaded = true;
-        return Response.json({ type: "llm", status: "loaded", instance_id: "instance-1" });
-      }
       if (path === "/proxy/v1/chat/completions") {
         const body = await request.json();
         if (!loaded || body.model !== "instance-1") return new Response(null, { status: 400 });
@@ -128,37 +131,50 @@ test("LM Studio cold-loads once, reuses its instance, and reloads after eviction
   });
   const provider: LlmProviderConfig = { name: "Studio", kind: "lm-studio", baseUrl: `${server.url}proxy/v1`, model: "downloaded-model", encryptedApiKey: "studio-key" };
   try {
-    expect(await generatePipelineAnalysis({ provider, context })).toEqual(valid);
+    expect(await generatePipelineAnalysis({ provider, context, studioClientFactory })).toEqual(valid);
     expect(loads).toBe(1);
-    expect(await generatePipelineAnalysis({ provider, context })).toEqual(valid);
+    expect(await generatePipelineAnalysis({ provider, context, studioClientFactory })).toEqual(valid);
     expect(loads).toBe(1);
-    expect(await generatePipelineAnalysis({ provider: { ...provider, model: "instance-1" }, context })).toEqual(valid);
+    expect(await generatePipelineAnalysis({ provider: { ...provider, model: "instance-1" }, context, studioClientFactory })).toEqual(valid);
     expect(loads).toBe(1);
     loaded = false;
-    expect(await generatePipelineAnalysis({ provider, context })).toEqual(valid);
+    expect(await generatePipelineAnalysis({ provider, context, studioClientFactory })).toEqual(valid);
     expect(loads).toBe(2);
   } finally { server.stop(true); }
 });
 
-test("LM Studio refuses missing, non-LLM, failed, and malformed loads before inference", async () => {
+test("LM Studio refuses missing and non-LLM selections before inference", async () => {
   const provider: LlmProviderConfig = { name: "Studio", kind: "lm-studio", baseUrl: "http://studio.test/v1", model: "model" };
   const scenarios = [
-    { models: [], load: {}, status: 200, error: "llm_model_not_found" },
-    { models: [{ type: "embedding", key: "model", loaded_instances: [] }], load: {}, status: 200, error: "llm_model_not_found" },
-    { models: [{ type: "llm", key: "model", loaded_instances: [] }], load: { secret: "private failure" }, status: 500, error: "llm_model_load_failed" },
-    { models: [{ type: "llm", key: "model", loaded_instances: [] }], load: {}, status: 401, error: "llm_auth_failed" },
-    { models: [{ type: "llm", key: "model", loaded_instances: [] }], load: { type: "llm", status: "loading", instance_id: "model" }, status: 200, error: "llm_invalid_response" },
+    { models: [], error: "llm_model_not_found" },
+    { models: [{ type: "embedding", key: "model", loaded_instances: [] }], error: "llm_model_not_found" },
   ];
   for (const scenario of scenarios) {
     let inferenceCalls = 0;
     await expect(generatePipelineAnalysis({ provider, context }, async (input) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/chat/completions")) { inferenceCalls++; return Response.json({}); }
-      if (path.endsWith("/load")) return Response.json(scenario.load, { status: scenario.status });
       return Response.json({ models: scenario.models });
     })).rejects.toThrow(scenario.error);
     expect(inferenceCalls).toBe(0);
   }
+});
+
+test.each(["partial", "cpu-experts", "vram-cap", "engine-error"])("LM Studio rejects %s instead of silently generating without full GPU offload", async mode => {
+  const provider: LlmProviderConfig = { name: "Studio", kind: "lm-studio", baseUrl: "http://studio.test/v1", model: "model" };
+  let inferenceCalls = 0;
+  const studioClientFactory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
+    llm: { model: async () => {
+      if (mode === "engine-error") throw new Error("private engine failure");
+      return { identifier: "model", getLoadConfig: async () => ({ gpu: { ratio: mode === "partial" ? 0.5 : 1, numCpuExpertLayersRatio: mode === "cpu-experts" ? 0.5 : "off" }, gpuStrictVramCap: mode === "vram-cap" }) };
+    } },
+    async [Symbol.asyncDispose]() {},
+  });
+  await expect(generatePipelineAnalysis({ provider, context, studioClientFactory }, async input => {
+    if (new URL(String(input)).pathname.endsWith("/chat/completions")) { inferenceCalls++; return Response.json({}); }
+    return Response.json({ models: [{ type: "llm", key: "model", loaded_instances: [{ id: "model" }] }] });
+  })).rejects.toThrow("llm_model_load_failed");
+  expect(inferenceCalls).toBe(0);
 });
 
 test("LM Studio model discovery includes unloaded LLMs but excludes embedding and decision models", async () => {
