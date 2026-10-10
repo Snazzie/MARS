@@ -144,6 +144,9 @@ export class GithubPrReviewClient {
       throw error;
     }
   }
+  async acknowledgeComment(owner: string, repo: string, commentId: number): Promise<void> {
+    await this.response(`${pathFor(owner, repo)}/issues/comments/${positiveInteger(commentId)}/reactions`, { method: "POST", body: JSON.stringify({ content: "+1" }) });
+  }
   async publish(owner: string, repo: string, number: number, input: GithubPrReviewInput): Promise<{ id: number; url: string }> {
     if (input.event !== "COMMENT" || !isGitSha(input.commit_id)) throw new Error("github_pr_review_input_invalid");
     const item = object(await this.parseJson(await this.response(`${pathFor(owner, repo)}/pulls/${positiveInteger(number)}/reviews`, { method: "POST", body: JSON.stringify(input) })));

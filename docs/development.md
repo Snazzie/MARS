@@ -163,7 +163,10 @@ Enabling is prospective and does not backfill open PRs.
 Eligible opened, reopened, ready-for-review, and synchronized revisions
 may be reviewed; drafts, closed PRs, and description-only changes are not reviewed.
 An authorized repository writer can also request the current revision by posting a
-standalone `/review` PR-conversation comment. Publication is advisory: MARS uses GitHub
+standalone `/review` PR-conversation comment. MARS adds a thumbs-up reaction to accepted
+commands, including commands that reuse existing same-revision work. The reaction
+acknowledges the request, not review completion; rejected commands receive no reaction.
+Publication is advisory: MARS uses GitHub
 COMMENT reviews and never approves, requests changes, blocks CI, applies suggestions,
 executes repository code, commits, pushes, or merges.
 Repeated `/review` commands reuse pending, running, or existing same-revision work;

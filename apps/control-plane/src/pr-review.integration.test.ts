@@ -28,10 +28,17 @@ async function fixture(work: (db: DatabaseClient) => Promise<void>) {
   } finally { await db.$client.end({ timeout: 1 }); }
 }
 function scenario(db: DatabaseClient) {
-  const observed = { modelCalls: 0, posts: [] as Record<string, unknown>[], remote: [] as Record<string, unknown>[], head, base, draft: false, state: "open", permission: "write", loseResponse: false };
+  const observed = { modelCalls: 0, posts: [] as Record<string, unknown>[], reactions: [] as number[], remote: [] as Record<string, unknown>[], head, base, draft: false, state: "open", permission: "write", loseResponse: false };
   const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith("/permission")) return Response.json({ permission: observed.permission });
+    const reaction = /^\/repos\/acme\/repo\/issues\/comments\/(\d+)\/reactions$/.exec(url.pathname);
+    if (reaction && init?.method === "POST") {
+      expect(JSON.parse(String(init.body))).toEqual({ content: "+1" });
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer installation-token");
+      observed.reactions.push(Number(reaction[1]));
+      return Response.json({ id: 200, content: "+1" }, { status: 201 });
+    }
     if (url.pathname.endsWith("/pulls/7")) return Response.json({ number: 7, state: observed.state, draft: observed.draft, title: "Fix division", body: "Untrusted PR text", changed_files: 1, base: { sha: observed.base }, head: { sha: observed.head } });
     if (url.pathname.endsWith("/files")) return Response.json([{ filename: "calc.ts", status: "modified", patch: "@@ -1 +1 @@\n-return n / d;\n+return n / 0;" }]);
     if (url.pathname.includes("/contents/")) {
@@ -67,9 +74,11 @@ integration("authorized commands reuse current revision and publish one pinned n
   await handlePrReviewWebhook(deps, "issue_comment", event, "replay");
   await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 51 } }, "second");
   expect(await db.select().from(schema.prReviews)).toHaveLength(1);
+  expect(observed.reactions).toEqual([50, 51]);
   await processPrReviews(deps);
   await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 52 } }, "third");
   await processPrReviews(deps);
+  expect(observed.reactions).toEqual([50, 51, 52]);
   expect(observed.modelCalls).toBe(1);
   expect(observed.posts).toHaveLength(1);
   expect(observed.posts[0]).toMatchObject({ event: "COMMENT", commit_id: head, comments: [{ path: "calc.ts", line: 1, side: "RIGHT" }] });
@@ -90,6 +99,7 @@ integration.each(["disabled", "unavailable", "unapproved", "draft", "closed", "u
   await handlePrReviewWebhook(deps, "issue_comment", event, mode);
   await processPrReviews(deps);
   expect(observed.modelCalls).toBe(0); expect(observed.posts).toEqual([]);
+  expect(observed.reactions).toEqual([]);
 }));
 
 integration.each(["push", "base", "draft", "close", "disable", "provider"])("%s during generation prevents stale publication", mode => fixture(async db => {

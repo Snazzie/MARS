@@ -99,7 +99,7 @@ function parts(repository: Repository): [string, string] {
   return parts as [string, string];
 }
 
-/** Webhook ingestion performs GitHub reads only; model work is durable and asynchronous. */
+/** Webhook ingestion captures durable work and acknowledges accepted commands; model work is asynchronous. */
 export async function handlePrReviewWebhook(deps: PrReviewWebhookDeps, event: string, payload: unknown, _deliveryId: string): Promise<void> {
   const trigger = parsePrReviewEvent(event, payload);
   if (!trigger) return;
@@ -131,6 +131,7 @@ export async function handlePrReviewWebhook(deps: PrReviewWebhookDeps, event: st
     await deps.providerConfig(repository.provider.id);
     await q.supersede.execute({ repositoryId: repository.repositoryId, prNumber: pr.number, baseSha: pr.baseSha, headSha: pr.headSha });
     await q.enqueue.execute({ organizationId: repository.organizationId, repositoryId: repository.repositoryId, prNumber: pr.number, baseSha: pr.baseSha, headSha: pr.headSha, trigger: trigger.trigger, commentId: trigger.commentId ?? null, requester: trigger.requester ?? null, providerId: repository.provider.id, providerSnapshot: snapshot(repository.provider), settingsUpdatedAt: repository.settingsUpdatedAt, source: { trigger: trigger.trigger, deliveryId: _deliveryId } });
+    if (trigger.trigger === "review_command") await client.acknowledgeComment(owner, repo, trigger.commentId!);
   });
 }
 
