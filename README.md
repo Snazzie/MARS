@@ -72,6 +72,8 @@ Each control plane is a **private, administrator-managed installation**, not a p
 
 Open `/onboarding` to configure the public HTTPS URL, create the GitHub App, sign in as the administrator, install the App with access to at least one repository, and enroll and configure a worker. Setup progress is saved; repository access can be corrected in GitHub and verified without restarting setup.
 
+For the GitHub App badge, upload [`assets/mars-github-avatar.png`](assets/mars-github-avatar.png) under the App's **Display information → Upload a logo → Set new avatar** in GitHub settings. This 200 × 200 PNG uses the official MARS symbol on an opaque white background, without text. GitHub App manifests cannot configure the logo.
+
 After the first operator claims administration, unrelated GitHub accounts are rejected before creating a local user or session. Authorized members receive access only to their installed organizations; setup and installation management remain administrator-only. Existing installations and their data stay together—no tenant split or database migration is required.
 
 Returning sign-ins refresh workspace memberships, retaining authorized installations and removing stale access before issuing a session.
