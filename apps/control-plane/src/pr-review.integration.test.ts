@@ -39,7 +39,8 @@ function scenario(db: DatabaseClient) {
       observed.reactions.push(Number(reaction[1]));
       return Response.json({ id: 200, content: "+1" }, { status: 201 });
     }
-    if (url.pathname.endsWith("/pulls/7")) return Response.json({ number: 7, state: observed.state, draft: observed.draft, title: "Fix division", body: "Untrusted PR text", changed_files: 1, base: { sha: observed.base }, head: { sha: observed.head } });
+    const pull = /^\/repos\/acme\/repo\/pulls\/(\d+)$/.exec(url.pathname);
+    if (pull) return Response.json({ number: Number(pull[1]), state: observed.state, draft: observed.draft, title: "Fix division", body: "Untrusted PR text", changed_files: 1, base: { sha: observed.base }, head: { sha: observed.head } });
     if (url.pathname.endsWith("/files")) return Response.json([{ filename: "calc.ts", status: "modified", patch: "@@ -1 +1 @@\n-return n / d;\n+return n / 0;" }]);
     if (url.pathname.includes("/contents/")) {
       if (url.pathname.endsWith("/.mars/pr-rules.md")) { expect(url.searchParams.get("ref")).toBe(observed.base); return new Response(null, { status: 404 }); }
@@ -199,6 +200,38 @@ integration("provider failures remain failures, never clean reviews", () => fixt
   await processPrReviews(deps);
   expect(observed.posts).toEqual([]);
   expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ analysisState: "failed", errorCode: "llm_auth_failed", result: null });
+}));
+
+integration("a fresh command retries failed unposted work while replay and published work stay idempotent", () => fixture(async db => {
+  const { deps, observed, event } = scenario(db);
+  await handlePrReviewWebhook(deps, "issue_comment", event, "initial");
+  deps.generate = async () => { throw new Error("llm_auth_failed"); };
+  await processPrReviews(deps);
+  expect((await db.select().from(schema.prReviews))[0].analysisState).toBe("failed");
+  deps.generate = async () => {
+    observed.modelCalls++;
+    return { findings: [{ path: "calc.ts", line: 1, endLine: null, severity: "High", confidencePercent: 85, evidence: "return n / 0;", impact: "Every call divides by zero instead of the denominator.", correction: "Use d as denominator.", suggestion: { startLine: 1, endLine: 1, originalText: "return n / 0;", replacementText: "return n / d;", rationale: "Uses the caller denominator." } }] };
+  };
+  await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 51 } }, "retry");
+  await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 51 } }, "retry-replay");
+  await processPrReviews(deps);
+  await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 52 } }, "published-command");
+  await processPrReviews(deps);
+  expect((await db.select().from(schema.prReviews))).toHaveLength(1);
+  expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ analysisState: "completed", publicationState: "published" });
+  expect(observed.modelCalls).toBe(1);
+  expect(observed.posts).toHaveLength(1);
+  expect(observed.reactions).toEqual([50, 51, 52]);
+}));
+
+integration("one processor call drains multiple pending review rows", () => fixture(async db => {
+  const { deps, observed, event } = scenario(db);
+  await handlePrReviewWebhook(deps, "issue_comment", event, "initial");
+  const [first] = await db.select().from(schema.prReviews);
+  await db.insert(schema.prReviews).values({ ...first, id: undefined as never, prNumber: 8, commentId: 51, createdAt: new Date(Date.now() + 1).toISOString() });
+  await processPrReviews(deps);
+  expect(observed.modelCalls).toBe(2);
+  expect((await db.select().from(schema.prReviews)).every(row => row.analysisState === "completed")).toBe(true);
 }));
 
 integration("rules-loading errors retain failed provenance and never call provider", () => fixture(async db => {

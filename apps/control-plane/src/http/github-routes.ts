@@ -116,6 +116,7 @@ export function registerGithubRoutes(app: Hono<ControlPlaneEnv>, deps: ControlPl
         }, eventName, payload, deliveryId);
       }
       await completeDelivery(deps.db, deliveryId);
+      deps.onBackgroundWorkCommitted?.();
       if (eventName === "workflow_job" && event.action === "queued") console.log("Queued GitHub job webhook", { deliveryId, installationId, repository: event.repository?.full_name, runId: event.workflow_job?.run_id, jobId: event.workflow_job?.id, queuedAt: event.workflow_job?.created_at, ingested });
     } catch (error) {
       if (eventName === "workflow_job") console.error("GitHub job webhook failed", { deliveryId, installationId, runId: event.workflow_job?.run_id, jobId: event.workflow_job?.id, error });

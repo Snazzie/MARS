@@ -47,6 +47,7 @@ function worker(db: DatabaseClient, calls: number[]): PipelineFailureAnalysisDep
       if (path.endsWith("/logs")) return new Response("AssertionError: expected 2 but got 3\n");
       if (path.includes("/actions/jobs/")) return Response.json({ id: Number(path.split("/").at(-1)), run_id: 812, run_attempt: 1, status: "completed", conclusion: "failure", steps: [] });
       if (path.endsWith("/actions/runs/812")) return Response.json({ pull_requests: [] });
+      if (path === "/repos/acme/repo") return Response.json({ id: 8 });
       if (path.endsWith("/actions/runs")) {
         const runs = await db.select().from(schema.dashboardRuns);
         return Response.json({ total_count: runs.length, workflow_runs: runs.map(row => ({ id: row.githubRunId, run_attempt: row.runAttempt, run_number: row.runNumber, name: row.workflowName, head_branch: row.branch, created_at: run.queuedAt })) });
@@ -69,7 +70,6 @@ integration("failed job webhook queues once, waits for the complete run, and ana
   expect(calls).toEqual([]);
   await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
   await enqueuePipelineFailureAnalysis({ db, organizationId: org, repositoryId: repo, run, jobs: [failedJob(), failedJob(9002)] });
-  await processPipelineFailureAnalyses(worker(db, calls));
   await processPipelineFailureAnalyses(worker(db, calls));
   expect(calls).toEqual([9001, 9002]);
   expect((await db.select().from(schema.pipelineFailureAnalyses))[0]).toMatchObject({ state: "completed", result: { summary: "Assertion failed" } });
@@ -127,6 +127,7 @@ integration("a newer run during comment lookup prevents posting obsolete PR feed
   deps.githubFetchForInstallation = () => (async (input, init) => {
     const path = new URL(String(input)).pathname;
     if (path.endsWith("/actions/runs/812")) return Response.json({ pull_requests: [{ number: 3, base: { repo: { id: 8 } } }] });
+    if (path === "/repos/acme/repo") return Response.json({ id: 8 });
     if (path.endsWith("/issues/3/comments")) {
       if (init?.method === "POST") { posts++; return Response.json({ id: 1, html_url: "https://github.com/acme/repo/issues/3#issuecomment-1" }); }
       await db.insert(schema.dashboardRuns).values({ ...run, id: undefined, organizationId: org, repositoryId: repo, githubRunId: 813, runNumber: 8, status: "queued", conclusion: null });
@@ -149,6 +150,7 @@ integration.each(["posted", "adopted", "unknown"] as const)("history preserves t
   deps.githubFetchForInstallation = () => (async (input, init) => {
     const path = new URL(String(input)).pathname;
     if (path.endsWith("/actions/runs/812")) return Response.json({ pull_requests: [{ number: 3, base: { repo: { id: 8 } } }] });
+    if (path === "/repos/acme/repo") return Response.json({ id: 8 });
     if (path.endsWith("/issues/3/comments")) {
       if (init?.method === "POST") {
         submittedBody = JSON.parse(String(init.body)).body;

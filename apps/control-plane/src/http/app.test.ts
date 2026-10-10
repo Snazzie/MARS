@@ -2385,6 +2385,11 @@ test("AI work is authenticated and inaccessible workspace work returns not found
   for (const query of ["?cursor=invalid", "?limit=0", "?limit=101", "?state=completed", "?view=unknown"]) {
     expect((await memberApp.request(`/api/organizations/all/ai-work${query}`)).status).toBe(400);
   }
+  expect((await memberApp.request("/api/organizations/not-a-member/ai-review-work")).status).toBe(404);
+  expect((await createControlPlaneApp(fakeHttpDeps()).request("/api/organizations/org/ai-review-work")).status).toBe(401);
+  for (const query of ["?cursor=invalid", "?limit=0", "?limit=101", "?state=completed", "?view=unknown"]) {
+    expect((await memberApp.request(`/api/organizations/all/ai-review-work${query}`)).status).toBe(400);
+  }
 });
 
 test("LM Studio test failures explain missing models without exposing provider details", async () => {

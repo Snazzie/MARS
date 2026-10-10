@@ -325,6 +325,16 @@ export const PrReviewResult = dto(strict({
   })).max(20),
 }));
 export type PrReviewResult = z.infer<typeof PrReviewResult>;
+export const PrReviewWork = dto(strict({
+  id, organizationId: id, repositoryId: id, repositoryName: z.string().min(1), prNumber: positiveSafe,
+  trigger: z.enum(["opened", "synchronize", "ready_for_review", "reopened", "review_command"]),
+  analysisState: z.enum(["pending", "running", "completed", "failed", "skipped", "superseded"]),
+  publicationState: z.enum(["pending", "publishing", "published", "failed", "unknown"]),
+  providerName: z.string().min(1), model: z.string().min(1),
+  result: PrReviewResult.nullable(), errorCode: z.string().min(1).nullable(), reviewUrl: z.string().url().nullable(),
+  metrics: PipelineAnalysisMetrics,
+}));
+export type PrReviewWork = z.infer<typeof PrReviewWork>;
 export const RepositoryPrReviewSettings = dto(strict({ organizationId: id, repositoryId: id, enabled: z.boolean(), providerId: id.nullable(), enabledSince: timestamp.nullable(), updatedAt: timestamp }));
 export type RepositoryPrReviewSettings = z.infer<typeof RepositoryPrReviewSettings>;
 export const PrReviewSummary = strict({

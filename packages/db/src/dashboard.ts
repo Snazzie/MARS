@@ -7,7 +7,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from
 import { getGithubRunnerCostSavings } from "./github-runner-cost.ts";
 import type { AiTokenUsage } from "@mars/contracts";
 import { aggregateAiTokenUsage, aggregateAiRunPerformance, getPipelineAnalysisMetrics, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
-import type { PipelineAnalysisWork } from "@mars/contracts";
+import type { PipelineAnalysisWork, PrReviewWork } from "@mars/contracts";
 export type DashboardDb = DatabaseClient;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
 const aiTokenUsageQueries = defineQueries(db => ({
@@ -552,6 +552,42 @@ export async function listPipelineAnalysisWork(db: DashboardDb, scope: { organiz
     result: row.result == null ? null : row.result as PipelineAnalysisWork["result"],
     comments: byAnalysis.get(String(row.id)) ?? [],
     errorCode: row.errorCode == null ? null : String(row.errorCode), metrics: analysisMetrics(row, now),
+  }));
+  return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
+}
+const prReviewWorkQueries = defineQueries(db => {
+  const review = schema.prReviews, repo = schema.dashboardRepositories;
+  const projection = {
+    id: review.id, organizationId: review.organizationId, repositoryId: review.repositoryId, repositoryName: repo.fullName,
+    prNumber: review.prNumber, trigger: review.trigger, analysisState: review.analysisState, publicationState: review.publicationState,
+    providerName: sql<string>`COALESCE(${review.providerSnapshot}->>'name', ${review.providerSnapshot}->>'provider', 'Unknown provider')`,
+    model: sql<string>`COALESCE(${review.providerSnapshot}->>'model', 'Unknown model')`,
+    result: review.result, errorCode: review.errorCode, reviewUrl: review.reviewUrl,
+    queuedAt: review.createdAt, startedAt: review.startedAt, finishedAt: review.completedAt,
+    calledAt: review.providerCalledAt, inputTokens: review.inputTokens, outputTokens: review.outputTokens,
+    tokensPerSecond: review.tokensPerSecond, estimatedCostUsd: review.estimatedCostUsd,
+    providerKind: sql<string | null>`${review.providerSnapshot}->>'kind'`,
+  };
+  const selected = sql`((${sql.placeholder("view")}='queue' AND ${review.analysisState} IN ('pending','running')) OR (${sql.placeholder("view")}='history' AND ${review.analysisState} IN ('completed','failed','skipped','superseded')))`;
+  const afterCursor = sql`(${sql.placeholder("cursor")}::uuid IS NULL OR CASE WHEN ${sql.placeholder("view")}='queue' THEN EXISTS (SELECT 1 FROM pr_reviews c WHERE c.id=${sql.placeholder("cursor")}::uuid AND (${review.createdAt},${review.id}) > (c.created_at,c.id)) ELSE EXISTS (SELECT 1 FROM pr_reviews c WHERE c.id=${sql.placeholder("cursor")}::uuid AND (${review.createdAt},${review.id}) < (c.created_at,c.id)) END)`;
+  const ordering = [asc(sql`CASE WHEN ${sql.placeholder("view")}='queue' THEN ${review.createdAt} END`), asc(sql`CASE WHEN ${sql.placeholder("view")}='queue' THEN ${review.id} END`), desc(sql`CASE WHEN ${sql.placeholder("view")}='history' THEN ${review.createdAt} END`), desc(sql`CASE WHEN ${sql.placeholder("view")}='history' THEN ${review.id} END`)];
+  const join = and(eq(repo.organizationId, review.organizationId), eq(repo.id, review.repositoryId));
+  return {
+    organization: db.select(projection).from(review).innerJoin(repo, join).where(and(eq(review.organizationId, sql.placeholder("organizationId")), selected, afterCursor)).orderBy(...ordering).limit(sql.placeholder("limit")).prepare("dashboard_pr_review_work"),
+    all: db.select(projection).from(review).innerJoin(repo, join).innerJoin(schema.memberships, and(eq(schema.memberships.organizationId, review.organizationId), eq(schema.memberships.userId, sql.placeholder("userId")))).where(and(selected, afterCursor)).orderBy(...ordering).limit(sql.placeholder("limit")).prepare("dashboard_all_pr_review_work"),
+  };
+});
+export async function listPrReviewWork(db: DashboardDb, scope: { organizationId: string } | { userId: string }, limit = 50, cursor: string | null = null, view: "queue" | "history" = "queue"): Promise<CursorPage<PrReviewWork>> {
+  const queries = prReviewWorkQueries(db);
+  const numeric = (value: unknown): number | null => value == null ? null : Number(value);
+  const rows = await ("organizationId" in scope ? queries.organization : queries.all).execute({ ...scope, limit: limit + 1, cursor, view }) as Record<string, unknown>[];
+  const selectedRows = rows.slice(0, limit);
+  const now = Date.now();
+  const items = selectedRows.map((row): PrReviewWork => ({
+    id: String(row.id), organizationId: String(row.organizationId), repositoryId: String(row.repositoryId), repositoryName: String(row.repositoryName),
+    prNumber: Number(row.prNumber), trigger: row.trigger as PrReviewWork["trigger"], analysisState: row.analysisState as PrReviewWork["analysisState"], publicationState: row.publicationState as PrReviewWork["publicationState"],
+    providerName: String(row.providerName), model: String(row.model), result: row.result as PrReviewWork["result"], errorCode: row.errorCode == null ? null : String(row.errorCode), reviewUrl: row.reviewUrl == null ? null : String(row.reviewUrl),
+    metrics: getPipelineAnalysisMetrics({ state: String(row.analysisState), queuedAt: normalizeTimestamp(row.queuedAt)!, startedAt: normalizeTimestamp(row.startedAt), finishedAt: normalizeTimestamp(row.finishedAt), calledAt: normalizeTimestamp(row.calledAt), inputTokens: numeric(row.inputTokens), outputTokens: numeric(row.outputTokens), tokensPerSecond: numeric(row.tokensPerSecond), inputUsdPerMillionTokens: null, outputUsdPerMillionTokens: null, providerKind: row.providerKind == null ? null : String(row.providerKind), estimatedCostUsd: numeric(row.estimatedCostUsd) }, now),
   }));
   return { items, nextCursor: rows.length > limit ? items.at(-1)!.id : null };
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createDb, getAllOverview, getOverview } from "./index.ts";
-import { getRunDetail, listPipelineAnalysisWork } from "./dashboard.ts";
+import { getRunDetail, listPipelineAnalysisWork, listPrReviewWork } from "./dashboard.ts";
 
 const databaseUrl = Bun.env.MARS_E2E_DATABASE_URL;
 const integration = databaseUrl ? test : test.skip;
@@ -172,6 +172,37 @@ integration("AI work queue preserves attempt identity, paginates tied enqueue ti
       expect((await getRunDetail(tx, org, run))?.failureAnalysis).toMatchObject({ runAttempt: 1, result, comments: [{ commentBody: "Exact posted text" }] });
       await tx.$client.unsafe("UPDATE pipeline_failure_analyses SET state='completed' WHERE id=$1", [queued]);
       expect((await listPipelineAnalysisWork(tx, { userId: user })).items.map(item => item.id)).toEqual([running]);
+    });
+  } finally {
+    await db.$client.end({ timeout: 1 });
+  }
+});
+
+integration("PR review work paginates and scopes workspace membership", async () => {
+  const db = createDb(databaseUrl!);
+  const org = "10000000-0000-4000-8000-000000000001";
+  const repo = "30000000-0000-4000-8000-000000000001";
+  const member = "20000000-0000-4000-8000-000000000001";
+  try {
+    await db.transaction(async tx => {
+      for (const table of ["pr_reviews", "dashboard_repositories", "memberships"]) {
+        await tx.$client.unsafe(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING DEFAULTS) ON COMMIT DROP`);
+      }
+      await tx.$client.unsafe("INSERT INTO dashboard_repositories (id, organization_id, installation_id, github_repository_id, name, full_name) VALUES ($1,$2,$3,1,'repo','acme/repo')", [repo, org, crypto.randomUUID()]);
+      await tx.$client.unsafe("INSERT INTO memberships (organization_id,user_id,role) VALUES ($1,$2,'member')", [org, member]);
+      const ids = ["40000000-0000-4000-8000-000000000001", "40000000-0000-4000-8000-000000000002"];
+      for (const [index, id] of ids.entries()) await tx.$client.unsafe("INSERT INTO pr_reviews (id,organization_id,repository_id,pr_number,base_sha,head_sha,trigger,provider_snapshot,source,settings_updated_at,analysis_state,publication_state,created_at,started_at,completed_at,input_tokens,output_tokens,estimated_cost_usd,provider_called_at) VALUES ($1,$2,$3,$4,'base','head','review_command',$5::jsonb,'{}'::jsonb,'2026-10-09T00:00:00Z',$6,'pending',$7,$8,$9,100,20,0.25,$8)", [id, org, repo, 40 + index, JSON.stringify({ name: "Provider", model: "model-x", kind: "openai-compatible" }), index === 0 ? "pending" : "completed", index === 0 ? "2026-10-09T00:00:00Z" : "2026-10-08T00:00:00Z", index === 0 ? null : "2026-10-08T00:00:10Z", index === 0 ? null : "2026-10-08T00:00:20Z"]);
+      const secondQueuedId = "40000000-0000-4000-8000-000000000003";
+      await tx.$client.unsafe("INSERT INTO pr_reviews (id,organization_id,repository_id,pr_number,base_sha,head_sha,trigger,provider_snapshot,source,settings_updated_at,analysis_state,publication_state,created_at) SELECT $1,organization_id,repository_id,42,base_sha,head_sha,trigger,provider_snapshot,source,settings_updated_at,'pending','pending',created_at + interval '1 second' FROM pr_reviews WHERE id=$2", [secondQueuedId, ids[0]]);
+      const queued = await listPrReviewWork(tx, { userId: member }, 1);
+      expect(queued.items[0]).toMatchObject({ id: ids[0], repositoryName: "acme/repo", prNumber: 40, providerName: "Provider", model: "model-x", analysisState: "pending" });
+      expect(queued.nextCursor).toBe(ids[0]);
+      const nextQueued = await listPrReviewWork(tx, { userId: member }, 1, queued.nextCursor);
+      expect(nextQueued.items.map(item => item.id)).toEqual([secondQueuedId]);
+      expect(nextQueued.nextCursor).toBeNull();
+      const history = await listPrReviewWork(tx, { organizationId: org }, 1, null, "history");
+      expect(history.items[0]).toMatchObject({ id: ids[1], analysisState: "completed", metrics: { usage: { input: 100, output: 20 }, estimatedCostUsd: 0.25 } });
+      expect((await listPrReviewWork(tx, { userId: crypto.randomUUID() })).items).toEqual([]);
     });
   } finally {
     await db.$client.end({ timeout: 1 });

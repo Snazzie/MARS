@@ -79,12 +79,12 @@ Dashboard recovery and navigation:
   before pagination, including All workspaces. Clear filters resets all three controls.
   Charts represent the loaded matching runs, not the complete history.
 - **Runs → AI** (`/runs/ai`) is a separate file-routed page, defaulting to **Recent runs**
-  for completed, failed, and skipped analyses, newest-enqueued first. **Queue** shows
-  pending/running analyses oldest first. Both retain captured run attempt, repository,
-  provider/model, metrics, and run links. They follow workspace scope (All workspaces
-  includes memberships only), independently of Jobs filters and reporting windows.
-  They refresh every five seconds while visible and paginate in the page's normal
-  scroll flow. Overview and **Runs → Jobs** (`/runs`) no longer embed AI lists.
+  for completed, failed, and skipped pipeline analyses and PR reviews. **Queue** shows
+  pending/running work oldest first. Pipeline analyses and PR reviews have independent
+  pagination, captured provider/model, metrics, and run or PR links. Both follow workspace
+  scope (All workspaces includes memberships only), independently of Jobs filters and
+  reporting windows. They refresh every five seconds while visible. Overview and
+  **Runs → Jobs** (`/runs`) no longer embed AI lists.
 - Desktop and mobile sidebar navigation are generated from the TanStack file routes'
   `staticData.navigation` metadata. Labels, ordering, section (`primary` or `settings`),
   admin-only visibility, and contextual help live with each route. Nesting follows
@@ -155,6 +155,18 @@ suggestions may be published to associated pull requests by the installed MARS G
 App. Repository and global enablement require a configured provider, with no separate
 acknowledgement checkbox. Only newly completed failures after opt-in are analyzed;
 no historical backfill or automatic retry is performed.
+
+AI processors start immediately at control-plane startup. Accepted webhooks and completed
+discovery passes wake processing without waiting for the 15-second recovery poll. Each
+processor drains eligible pending work, starting the next job as soon as its current job
+finishes; jobs still awaiting complete evidence remain queued. A fresh authorized `/review`
+command can retry a failed, skipped, or superseded same-revision review that was never
+submitted. Replayed commands, active work, generated reviews, and uncertain publication
+outcomes do not trigger duplicate inference or posts.
+
+Pipeline feedback resolves PR associations from workflow-run metadata and the run commit's
+associated PRs, restricted to the target repository. Merge commits need not equal a PR's
+head SHA. Empty feedback records alone are not evidence that a run has no associated PR.
 
 LM Studio profiles use the native server's model-discovery HTTP API and the official
 SDK's WebSocket model-management endpoint at the same API root (remove `/v1` and use

@@ -27,6 +27,7 @@ const queries = defineQueries(db => {
     lockRepository: db.select({ id: r.id }).from(r).where(eq(r.id, placeholder("repositoryId"))).for("update").prepare("pr_review_lock_repository"),
     command: db.insert(schema.prReviewCommands).values({ organizationId: placeholder("organizationId"), repositoryId: placeholder("repositoryId"), commentId: placeholder("commentId"), requester: placeholder("requester") }).onConflictDoNothing().returning({ commentId: schema.prReviewCommands.commentId }).prepare("pr_review_command"),
     enqueue: db.insert(a).values({ organizationId: placeholder("organizationId"), repositoryId: placeholder("repositoryId"), prNumber: placeholder("prNumber"), baseSha: placeholder("baseSha"), headSha: placeholder("headSha"), trigger: placeholder("trigger"), commentId: placeholder("commentId"), requester: placeholder("requester"), providerId: placeholder("providerId"), providerSnapshot: placeholder("providerSnapshot"), settingsUpdatedAt: placeholder("settingsUpdatedAt"), analysisState: "pending", publicationState: "pending", source: placeholder("source") }).onConflictDoNothing().returning({ id: a.id }).prepare("pr_review_enqueue"),
+    retry: db.update(a).set({ analysisState: "pending", trigger: sql`${placeholder("trigger")}`, commentId: sql`${placeholder("commentId")}`, requester: sql`${placeholder("requester")}`, providerId: sql`${placeholder("providerId")}`, providerSnapshot: sql`${placeholder("retryProviderSnapshot")}::jsonb`, settingsUpdatedAt: sql`${placeholder("settingsUpdatedAt")}`, source: sql`${placeholder("retrySource")}::jsonb`, result: null, errorCode: null, startedAt: null, completedAt: null, providerCalledAt: null, inputTokens: null, outputTokens: null, tokensPerSecond: null, estimatedCostUsd: null }).where(and(eq(a.organizationId, placeholder("organizationId")), eq(a.repositoryId, placeholder("repositoryId")), eq(a.prNumber, placeholder("prNumber")), eq(a.baseSha, placeholder("baseSha")), eq(a.headSha, placeholder("headSha")), inArray(a.analysisState, ["failed", "skipped", "superseded"]), eq(a.publicationState, "pending"))).returning({ id: a.id }).prepare("pr_review_retry"),
     supersede: db.update(a).set({ analysisState: "superseded", errorCode: "pr_review_superseded", completedAt: sql`now()` }).where(and(eq(a.repositoryId, placeholder("repositoryId")), eq(a.prNumber, placeholder("prNumber")), inArray(a.analysisState, ["pending", "running"]), or(ne(a.baseSha, placeholder("baseSha")), ne(a.headSha, placeholder("headSha"))))).prepare("pr_review_supersede"),
     invalidate: db.update(a).set({ analysisState: "skipped", errorCode: "pr_review_closed_or_draft", completedAt: sql`now()` }).where(and(eq(a.repositoryId, placeholder("repositoryId")), eq(a.prNumber, placeholder("prNumber")), inArray(a.analysisState, ["pending", "running"]))).prepare("pr_review_invalidate"),
     interruptedAnalysis: db.update(a).set({ analysisState: "failed", errorCode: "pr_review_interrupted", completedAt: sql`now()` }).where(and(eq(a.analysisState, "running"), sql`${a.startedAt}<now()-interval '15 minutes'`)).prepare("pr_review_interrupted_analysis"),
@@ -130,7 +131,9 @@ export async function handlePrReviewWebhook(deps: PrReviewWebhookDeps, event: st
     if (trigger.trigger === "closed" || trigger.trigger === "converted_to_draft") return;
     await deps.providerConfig(repository.provider.id);
     await q.supersede.execute({ repositoryId: repository.repositoryId, prNumber: pr.number, baseSha: pr.baseSha, headSha: pr.headSha });
-    await q.enqueue.execute({ organizationId: repository.organizationId, repositoryId: repository.repositoryId, prNumber: pr.number, baseSha: pr.baseSha, headSha: pr.headSha, trigger: trigger.trigger, commentId: trigger.commentId ?? null, requester: trigger.requester ?? null, providerId: repository.provider.id, providerSnapshot: snapshot(repository.provider), settingsUpdatedAt: repository.settingsUpdatedAt, source: { trigger: trigger.trigger, deliveryId: _deliveryId } });
+    const review = { organizationId: repository.organizationId, repositoryId: repository.repositoryId, prNumber: pr.number, baseSha: pr.baseSha, headSha: pr.headSha, trigger: trigger.trigger, commentId: trigger.commentId ?? null, requester: trigger.requester ?? null, providerId: repository.provider.id, providerSnapshot: snapshot(repository.provider), settingsUpdatedAt: repository.settingsUpdatedAt };
+    const retried = trigger.trigger === "review_command" ? await q.retry.execute({ organizationId: review.organizationId, repositoryId: review.repositoryId, prNumber: review.prNumber, baseSha: review.baseSha, headSha: review.headSha, trigger: review.trigger, commentId: review.commentId, requester: review.requester, providerId: review.providerId, retryProviderSnapshot: JSON.stringify(review.providerSnapshot), settingsUpdatedAt: review.settingsUpdatedAt, retrySource: JSON.stringify({ trigger: trigger.trigger, deliveryId: _deliveryId }) }) : [];
+    if (!retried.length) await q.enqueue.execute({ ...review, source: { trigger: trigger.trigger, deliveryId: _deliveryId } });
     if (trigger.trigger === "review_command") await client.acknowledgeComment(owner, repo, trigger.commentId!);
   });
 }
@@ -200,12 +203,18 @@ export async function processPrReviews(deps: PrReviewDeps): Promise<void> {
   }
   // Generated results are recoverable without another model call.
   for (const row of await q.readyPublication.execute({})) await publish(deps, row);
-  const row = await deps.db.transaction(async tx => {
-    const statements = queries(tx), [candidate] = await statements.claim.execute({});
-    if (!candidate) return null;
-    return (await statements.start.execute({ id: candidate.id }))[0] ?? null;
-  });
-  if (!row) return;
+  while (true) {
+    const row = await deps.db.transaction(async tx => {
+      const statements = queries(tx), [candidate] = await statements.claim.execute({});
+      if (!candidate) return null;
+      return (await statements.start.execute({ id: candidate.id }))[0] ?? null;
+    });
+    if (!row) return;
+    await processPrReview(deps, q, row);
+  }
+}
+
+async function processPrReview(deps: PrReviewDeps, q: ReturnType<typeof queries>, row: ReviewRow): Promise<void> {
   try {
     const { client, owner, repo, pr } = await current(deps, row);
     const context = await collectPrReviewContext(client, owner, repo, pr);

@@ -531,7 +531,8 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
   const dispatchHealth = new DispatchHealthMonitor(reconciliationIntervalMs);
   const githubApp = options.githubApp ?? new GitHubAppService({ db, secretBox, publicOrigin: initialized.setup.publicOrigin, webhookOrigin: () => configuredWebhookOrigin });
   const githubRateLimits = new GithubRateLimitGate();
-  const httpApp = createControlPlaneApp({ db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, secretBox, githubApp, llmProviders, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, workerReleaseCatalog, workerUpgradeService, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, workerJoin: options.workerJoin, devWindowsImageBuild: options.devWindowsImageBuild ? () => options.devWindowsImageBuild!(windowsContainerBuild, initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null) : undefined, disableWorkerBootstrapManagement: options.disableWorkerBootstrapManagement, controlPlaneLogs: options.controlPlaneLogs, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: workerId => dispatcher.replayConnected(workerId), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), dispatchHealth: organizationIds => dispatchHealth.snapshot(organizationIds) });
+  let triggerAiProcessing = () => {};
+  const httpApp = createControlPlaneApp({ onBackgroundWorkCommitted: () => { void triggerReconciliation(); triggerAiProcessing(); }, db, setup: initialized.setup, browserOrigin: () => Bun.env.NODE_ENV !== "production" ? (Bun.env.BROWSER_BASE_URL?.trim() || initialized.setup.publicOrigin()) : initialized.setup.publicOrigin(), workerConnectionOrigins, currentUser: current, requestId: () => crypto.randomUUID(), requestSource: request => requestSources.get(request) ?? "unknown", webRoot, secretBox, githubApp, llmProviders, defaultJobImages: env.DEFAULT_IMAGES, workerReleaseManifest, workerReleaseCatalog, workerUpgradeService, developmentWindowsArtifacts, developmentLinuxArtifacts, developmentLinuxArm64Artifacts, developmentMacosArtifacts, windowsContainerBuild, windowsContainerArtifacts, workerInstallerRoot, workerJoin: options.workerJoin, devWindowsImageBuild: options.devWindowsImageBuild ? () => options.devWindowsImageBuild!(windowsContainerBuild, initialized.setup.publicOrigin() ?? configuredPublicOrigin ?? null) : undefined, disableWorkerBootstrapManagement: options.disableWorkerBootstrapManagement, controlPlaneLogs: options.controlPlaneLogs, workerDispatcher: dispatcher, workerConnected: workerId => dispatcher.isConnected(workerId), onWorkerChanged: workerId => dispatcher.replayConnected(workerId), health: () => ({ buildId: controlPlaneBuildId(), startedAt, discovery: discoveryHealth.snapshot() }), dispatchHealth: organizationIds => dispatchHealth.snapshot(organizationIds) });
   let triggerReconciliation = () => Promise.resolve();
   const gateway = createControlPlaneGateway({ db, httpFetch: async request => await httpApp.fetch(request), current, requestSource: (request, activeServer) => { requestSources.set(request, activeServer.requestIP(request)?.address ?? "unknown"); return requestSources.get(request) ?? "unknown"; }, dispatcher, refreshDefaultPools: () => ensureDefaultPools(db, env.DEFAULT_IMAGES), triggerReconciliation: () => triggerReconciliation(), requestId: () => crypto.randomUUID() });
   let server!: Server<ControlPlaneSocketData>;
@@ -609,6 +610,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         const pickup = await discoverQueuedRepositoryJobs(discoveryDeps);
         console.log("Queued GitHub job discovery finished", { ...pickup, durationMs: Date.now() - started });
         if (pickup.updated > 0) await reconciliationScheduler.trigger();
+        triggerAiProcessing();
       } catch (error) {
         console.error("Queued GitHub job discovery failed", error);
       }
@@ -617,6 +619,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
       discoveryHealth.markAttempt();
       try {
         const report = await discoverAvailableRepositoryJobs(discoveryDeps);
+        triggerAiProcessing();
         if (isDiscoveryCycleSuccessful(report)) discoveryHealth.markSuccess();
         if (report.failed) console.error(`GitHub job discovery: repositories=${report.repositories} discovered=${report.discovered} updated=${report.updated} failed=${report.failed}`);
       } catch (error) { console.error("GitHub job discovery failed", error); }
@@ -636,7 +639,7 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
         if (cleanup.deleted || cleanup.failed) console.log("GitHub runner cleanup", cleanup);
       } catch (error) { console.error("GitHub runner cleanup failed", error); }
     }, 15_000, false);
-    startReconciliationScheduler(async () => {
+    const pipelineAnalysisScheduler = startReconciliationScheduler(async () => {
       try {
         const [app] = await startupQueries(db).githubAppId.execute({});
         await processPipelineFailureAnalyses({
@@ -649,8 +652,8 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
           githubAppId: app?.appId == null ? undefined : Number(app.appId),
         });
       } catch (error) { console.error("Pipeline failure analysis processing failed", error); }
-    }, 15_000, false);
-    startReconciliationScheduler(async () => {
+    }, 15_000);
+    const prReviewScheduler = startReconciliationScheduler(async () => {
       try {
         const [app] = await startupQueries(db).githubAppId.execute({});
         await processPrReviews({
@@ -664,8 +667,12 @@ export async function startControlPlane(options: ControlPlaneStartOptions = {}) 
           githubAppSlug: app?.slug ?? undefined,
         });
       } catch (error) { console.error("PR review processing failed", error); }
-    }, 15_000, false);
+    }, 15_000);
     triggerReconciliation = reconciliationScheduler.trigger;
+    triggerAiProcessing = () => {
+      void pipelineAnalysisScheduler.trigger();
+      void prReviewScheduler.trigger();
+    };
     const runRetention = async () => { try { console.log("Retention pruner", await pruneExpiredData(db)); } catch (error) { console.error("Retention pruning failed", error); } };
     void runRetention();
     setInterval(() => { void runRetention(); }, 24 * 60 * 60 * 1_000);

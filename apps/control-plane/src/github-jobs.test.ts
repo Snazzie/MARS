@@ -143,25 +143,23 @@ test("rejects runner diagnostics with unknown busy state or mismatched identity"
   }
 });
 
-test("resolves PRs from run metadata and verifies commit fallback against repository and head SHA", async () => {
+test("resolves PRs from run metadata and commit fallback within the target repository", async () => {
   const requests: Request[] = [];
   const client = new GithubJobsClient({ token: async () => "installation-token", fetch: async (input, init) => {
     const request = new Request(input, init);
     requests.push(request);
-    if (request.url.endsWith("/actions/runs/1")) return Response.json({ head_sha: "sha-run", pull_requests: [] });
+    if (request.url.endsWith("/actions/runs/1")) return Response.json({ head_sha: "sha-run", pull_requests: [{ number: 3, base: { repo: { id: 20 } } }, { number: 7, base: { repo: { id: 21 } } }] });
     if (request.url.endsWith("/commits/sha-run/pulls")) return Response.json([
-      { number: 4, base: { repo: { id: 20 } }, head: { sha: "sha-run" } },
+      { number: 4, base: { repo: { id: 20 } }, head: { sha: "different-pr-head" } },
       { number: 5, base: { repo: { id: 21 } }, head: { sha: "sha-run" } },
-      { number: 6, base: { repo: { id: 20 } }, head: { sha: "other" } },
     ]);
     return Response.json({ id: 20 });
   } });
-  expect(await client.listRunPullRequests("acme", "project", 1)).toEqual([{ number: 4, baseRepositoryId: 20 }]);
-  expect(requests.map(request => request.url)).toEqual([
-    "https://api.github.com/repos/acme/project/actions/runs/1",
-    "https://api.github.com/repos/acme/project/commits/sha-run/pulls",
-    "https://api.github.com/repos/acme/project",
+  expect(await client.listRunPullRequests("acme", "project", 1)).toEqual([
+    { number: 3, baseRepositoryId: 20 },
+    { number: 4, baseRepositoryId: 20 },
   ]);
+  expect(requests.map(request => request.url)).toContain("https://api.github.com/repos/acme/project/commits/sha-run/pulls");
 });
 
 test("lists paged PR comments and creates comments with the installation token", async () => {

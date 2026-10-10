@@ -280,21 +280,8 @@ async function adoptUnknownComments(deps: PipelineFailureAnalysisDeps): Promise<
   }
 }
 
-export async function processPipelineFailureAnalyses(deps: PipelineFailureAnalysisDeps): Promise<void> {
+async function processClaimedAnalysis(deps: PipelineFailureAnalysisDeps, id: string): Promise<void> {
   const statements = queries(deps.db);
-  await statements.stale.execute({});
-  await statements.cancelSuperseded.execute({});
-  await statements.cancelNonfailed.execute({});
-  await statements.unknownComments.execute({});
-  await adoptUnknownComments(deps);
-  const id = await deps.db.transaction(async tx => {
-    const q = queries(tx as unknown as DatabaseClient);
-    const [candidate] = await q.claim.execute({});
-    if (!candidate) return null;
-    const [claimed] = await q.claimUpdate.execute({ id: candidate.id });
-    return claimed?.id ?? null;
-  });
-  if (!id) return;
   const [analysis] = await statements.analysis.execute({ id });
   if (!analysis) return;
   const installationId = Number(analysis.installationId);
@@ -324,5 +311,25 @@ export async function processPipelineFailureAnalyses(deps: PipelineFailureAnalys
     const code = safeErrorCode(error);
     if (code === "analysis_logs_unavailable") await statements.fail.execute({ id, errorCode: code });
     else await statements.fail.execute({ id, errorCode: code });
+  }
+}
+
+export async function processPipelineFailureAnalyses(deps: PipelineFailureAnalysisDeps): Promise<void> {
+  const statements = queries(deps.db);
+  await statements.stale.execute({});
+  await statements.cancelSuperseded.execute({});
+  await statements.cancelNonfailed.execute({});
+  await statements.unknownComments.execute({});
+  await adoptUnknownComments(deps);
+  for (;;) {
+    const id = await deps.db.transaction(async tx => {
+      const q = queries(tx as unknown as DatabaseClient);
+      const [candidate] = await q.claim.execute({});
+      if (!candidate) return null;
+      const [claimed] = await q.claimUpdate.execute({ id: candidate.id });
+      return claimed?.id ?? null;
+    });
+    if (!id) return;
+    await processClaimedAnalysis(deps, String(id));
   }
 }

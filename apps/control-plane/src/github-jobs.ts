@@ -72,8 +72,12 @@ export class GithubJobsClient {
   }
   async listRunPullRequests(owner: string, repo: string, runId: number): Promise<GithubPullRequestReference[]> {
     const repositoryPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-    const run = await this.request(`${repositoryPath}/actions/runs/${runId}`);
+    const [run, repository] = await Promise.all([
+      this.request(`${repositoryPath}/actions/runs/${runId}`),
+      this.request(repositoryPath),
+    ]);
     const headSha = nullableString(run.head_sha);
+    const repositoryId = positiveSafeInteger(repository.id);
     const parse = (raw: unknown): GithubPullRequestReference => {
       if (!raw || typeof raw !== "object") throw new Error("github_payload_invalid");
       const item = raw as Record<string, unknown>;
@@ -82,19 +86,17 @@ export class GithubJobsClient {
       const baseRepositoryId = positiveSafeInteger((base.repo as Record<string, unknown> | undefined)?.id);
       return { number, baseRepositoryId };
     };
-    if (Array.isArray(run.pull_requests) && run.pull_requests.length) return run.pull_requests.map(parse);
-    if (!headSha) return [];
+    const fromRun = Array.isArray(run.pull_requests)
+      ? run.pull_requests.map(parse).filter(item => item.baseRepositoryId === repositoryId)
+      : [];
+    if (!headSha) return [...new Map(fromRun.map(item => [item.number, item])).values()];
     const commit = await this.requestArray(`${repositoryPath}/commits/${encodeURIComponent(headSha)}/pulls`);
-    const repository = await this.request(repositoryPath);
-    const repositoryId = positiveSafeInteger(repository.id);
-    const verified = commit.flatMap(raw => {
+    const fromCommit = commit.flatMap(raw => {
       if (!raw || typeof raw !== "object") return [];
-      const item = raw as Record<string, unknown>;
-      const head = item.head && typeof item.head === "object" ? item.head as Record<string, unknown> : {};
       const reference = parse(raw);
-      return head.sha === headSha && reference.baseRepositoryId === repositoryId ? [reference] : [];
+      return reference.baseRepositoryId === repositoryId ? [reference] : [];
     });
-    return [...new Map(verified.map(item => [item.number, item])).values()];
+    return [...new Map([...fromRun, ...fromCommit].map(item => [item.number, item])).values()];
   }
   async listPullRequestComments(owner: string, repo: string, prNumber: number, page: number): Promise<GithubPullRequestComment[]> {
     const values = await this.requestArray(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${positiveSafeInteger(prNumber)}/comments?per_page=100&page=${positiveSafeInteger(page)}`);

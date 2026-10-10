@@ -161,6 +161,7 @@ export type ControlPlaneHttpDeps = {
   workerDispatcher?: WorkerCommandDispatcher;
   workerConnected?: (workerId: string) => boolean;
   onWorkerChanged(workerId: string): void | Promise<void>;
+  onBackgroundWorkCommitted?: () => void;
   health(): ControlPlaneHealth;
   dispatchHealth?: (organizationIds: readonly string[] | null) => DispatchHealthSnapshot;
   controlPlaneLogs?: ControlPlaneLogSource;
