@@ -7,7 +7,7 @@ import { reconcileWorkerInventory } from "./lease-reconciliation.ts";
 import { verifyWorkerSignature } from "./workers.ts";
 import { createWorkerChallenge, decodeWorkerSignature } from "./worker-socket.ts";
 import { WorkerCommandDispatcher, containsSecret, type AuthenticatedWorkerSocket } from "./worker-dispatch.ts";
-import { applyWorkerConfigurationAcknowledgement, applyWorkerConfigurationFailure } from "./worker-requests.ts";
+import { applyWorkerConfigurationAcknowledgement, applyWorkerConfigurationFailure, recoverWorkerConfigurationFromDoctor } from "./worker-requests.ts";
 import { activateAuthenticatedWorkerConnection } from "./worker-connection.ts";
 import { handleAuthenticatedWorkerEvent } from "./worker-lifecycle.ts";
 
@@ -251,6 +251,9 @@ export function createControlPlaneGateway(options: GatewayOptions) {
         void options.triggerReconciliation();
         if (doctorPayload.doctor.activeLeases && doctorPayload.doctor.inventoryObservedAt) {
           await reconcileWorkerInventory(options.db, ws.data.workerId, doctorPayload.doctor.activeLeases, doctorPayload.doctor.inventoryObservedAt);
+        }
+        if (await recoverWorkerConfigurationFromDoctor(options.db, ws.data.workerId, doctorPayload)) {
+          await options.dispatcher.replayConnected(ws.data.workerId);
         }
         if (workerSockets.get(ws.data.workerId) !== ws || workerConnectionEpochs.get(ws.data.workerId) !== epoch) return;
         ws.send(JSON.stringify({ version: 1, type: "doctor_ack", workerId: ws.data.workerId }));

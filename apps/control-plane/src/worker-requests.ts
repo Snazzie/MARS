@@ -2,7 +2,7 @@ import type { DatabaseClient } from "@mars/db";
 import { defineQueries, schema } from "@mars/db";
 import { and, eq, inArray, or, isNull, count, sql } from "drizzle-orm";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerRunnerCachePurgePayload, validateWorkerGuestPlatforms, selectedRuntimeDriver, CURRENT_WORKER_CONTRACT_VERSION, parseWorkerContractVersion, type GuestPlatform, type RuntimeDriverName } from "@mars/contracts";
+import { WorkerBootstrapRequest, PendingWorkerRequest, ApproveWorkerRequest, WorkerConfiguration, WorkerConfigurePayload, WorkerObservedConfiguration, WorkerDoctorData, WorkerRunnerCachePurgePayload, validateWorkerGuestPlatforms, selectedRuntimeDriver, CURRENT_WORKER_CONTRACT_VERSION, parseWorkerContractVersion, type GuestPlatform, type RuntimeDriverName, type WorkerDoctorReport } from "@mars/contracts";
 import { z } from "zod";
 import type { WorkerCommandDispatcher } from "./worker-dispatch.ts";
 import { fingerprint } from "./workers.ts";
@@ -33,6 +33,7 @@ const queries = defineQueries(db => ({
   cacheStatusDisable: db.update(schema.workerCacheStatus).set({ ready: false, runnerCacheEnabled: false, runnerCacheObservedAt: sql`now()` }).where(eq(schema.workerCacheStatus.workerId, sql.placeholder("workerId"))).prepare("worker_request_disable_cache"),
   workerConnectLock: db.select({ desiredConfiguration: schema.workers.desiredConfiguration, configurationRevision: schema.workers.configurationRevision, appliedConfigurationRevision: schema.workers.appliedConfigurationRevision, configurationCommandId: schema.workers.configurationCommandId, configurationState: schema.workers.configurationState }).from(schema.workers).where(eq(schema.workers.id, sql.placeholder("workerId"))).for("update").prepare("worker_request_connect_lock"),
   commandsPendingConfig: db.select({ id: schema.commands.id, payload: schema.commands.payload }).from(schema.commands).where(and(eq(schema.commands.workerId, sql.placeholder("workerId")), eq(schema.commands.type, "worker.configure"), inArray(schema.commands.state, ["pending", "sent"]))).orderBy(sql`${schema.commands.occurredAt} desc`).prepare("worker_request_pending_config"),
+  retryConfigurationEligible: db.select({ id: schema.workers.id }).from(schema.workers).where(and(eq(schema.workers.id, sql.placeholder("workerId")), eq(schema.workers.admissionState, "adopted"), eq(schema.workers.configurationState, "error"), sql`exists(select 1 from commands c where c.id=${schema.workers.configurationCommandId} and c.occurred_at < now()-interval '30 seconds')`)).prepare("worker_request_retry_configuration_eligible"),
   updateConfigurationCommandState: db.update(schema.commands).set({ state: sql`${sql.placeholder("state")}` }).where(and(eq(schema.commands.workerId, sql.placeholder("workerId")), eq(schema.commands.type, "worker.configure"), inArray(schema.commands.state, ["pending", "sent"]))).prepare("worker_request_configuration_command_state"),
   auditConfigure: db.insert(schema.auditEvents).values({ actor: sql.placeholder("actor"), type: sql.placeholder("type"), payload: sql`${sql.placeholder("payload")}::jsonb` }).prepare("worker_request_audit_configure"),
   reject: db.update(schema.workers).set({ admissionState: "rejected", configurationState: "unconfigured" }).where(and(eq(schema.workers.id, sql.placeholder("workerId")), inArray(schema.workers.admissionState, ["pending", "adopted"]))).returning({ id: schema.workers.id }).prepare("worker_request_reject"),
@@ -287,6 +288,24 @@ export async function reconcileWorkerConfigurationOnConnect(db: DatabaseClient, 
     await q.insertCommand.execute({ commandId, type: "worker.configure", workerId, payload: JSON.stringify(payload) });
     await q.connectNewCommand.execute({ workerId, revision, commandId });
     return { state: "applying", commandId };
+  });
+}
+
+export async function recoverWorkerConfigurationFromDoctor(db: DatabaseClient, workerId: string, report: WorkerDoctorReport): Promise<boolean> {
+  if (!report.doctor.inventoryObservedAt || Date.now() - Date.parse(report.doctor.inventoryObservedAt) >= 60_000 || !report.doctor.activeLeases || report.doctor.activeLeases.length) return false;
+  return db.transaction(async tx => {
+    const q = queries(tx);
+    const [worker] = await q.workerConnectLock.execute({ workerId });
+    if (!worker || worker.configurationState !== "error") return false;
+    let desiredInput = worker.desiredConfiguration;
+    if (typeof desiredInput === "string") {
+      try { desiredInput = JSON.parse(desiredInput); } catch { return false; }
+    }
+    const desired = WorkerConfiguration.safeParse(desiredInput);
+    if (!desired.success || !report.doctor.capabilities?.some(capability => capability.ready && capability.driver === desired.data.selectedDriver && desired.data.guestPlatforms.includes(capability.guestPlatform))) return false;
+    if (!(await q.retryConfigurationEligible.execute({ workerId }))[0]) return false;
+    const recovered = await reconcileWorkerConfigurationOnConnect(tx, workerId, true);
+    return recovered.state === "applying";
   });
 }
 export async function rejectPendingWorker(db: DatabaseClient, workerId: string, adminId: string): Promise<void> {

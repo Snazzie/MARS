@@ -189,7 +189,7 @@ test("accepts a Linux ARM64 Docker selection on a Windows worker and rejects the
   await expect(applyWindowsWorkerConfiguration(limits, cache, { ...config, guestPlatforms: ["windows-x64"], selectedDriver: "windows-hyperv-container" }, service, "windows-arm64")).rejects.toThrow("incompatible");
 });
 
-test("refuses to switch Windows runtime while a lease is active", async () => {
+test("defers runtime changes until leases finish and acknowledges same-revision replays while busy", async () => {
   const payload = WorkerConfigurePayload.parse({
     workerId: "11111111-1111-4111-8111-111111111111",
     revision: "a".repeat(64),
@@ -201,24 +201,57 @@ test("refuses to switch Windows runtime while a lease is active", async () => {
     cache: { ttlSeconds: 3600, runnerCacheEnabled: true, runnerCacheMaxGiB: 20 },
   });
   const workerId = payload.workerId;
-  const identity = { workerId, publicKey: "", privateKey: "", encryptionPublicKey: "", encryptionPrivateKey: "", selectedDriver: "windows-hyperv-container" as const, guestPlatform: "windows-x64" as const };
+  const identity = { workerId, publicKey: "", privateKey: "", encryptionPublicKey: "", encryptionPrivateKey: "", selectedDriver: "windows-hyperv-container", guestPlatform: "windows-x64" };
   const sent: WorkerEvent[] = [];
   let switches = 0;
-  await executeWindowsWorkerCommand({ version: 1, id: "33333333-3333-4333-8333-333333333333", type: "worker.configure", workerId, leaseId: null, occurredAt: new Date().toISOString(), payload }, {
+  let probes = 0;
+  const { promise: leaseFinished, resolve: finish } = Promise.withResolvers<void>();
+  const activeLeases = new Map([["22222222-2222-4222-8222-222222222222", leaseFinished]]);
+  const root = await mkdtemp(join(tmpdir(), "mars-configuration-recovery-"));
+  const previousIdentity = Bun.env.MARS_WORKER_IDENTITY_FILE;
+  Bun.env.MARS_WORKER_IDENTITY_FILE = join(root, "identity.json");
+  const context = {
     limits: { ...payload.runtime },
     cache: { ...payload.cache },
-    cacheService: {} as never,
+    cacheService: { applyTtl: async () => {}, setRunnerCacheEnabled: () => {}, setRunnerCacheMaxGiB: () => {} } as never,
     driver: {} as never,
     applyDriver: async () => { switches++; },
     identity,
-    activeLeases: new Map([["22222222-2222-4222-8222-222222222222", Promise.resolve()]]),
-    send: event => sent.push(event),
+    activeLeases,
+    hostPlatform: "windows-x64" as const,
+    collectDoctor: async () => { probes++; return { ...doctor, capabilities: [{ driver: "windows-process-container" as const, guestPlatform: "windows-x64" as const, ready: true, imageDigest: `sha256:${"a".repeat(64)}`, remediation: null }] }; },
+    send: (event: WorkerEvent) => sent.push(event),
     sendDoctor: () => {},
-  });
-  expect(switches).toBe(0);
-  expect(identity.selectedDriver).toBe("windows-hyperv-container");
-  expect(sent.map(event => event.type)).toEqual(["worker.configuration_failed"]);
-  expect(sent[0]?.payload).toMatchObject({ commandId: "33333333-3333-4333-8333-333333333333", revision: payload.revision });
+  };
+  const command: WorkerCommand = { version: 1, id: "33333333-3333-4333-8333-333333333333", type: "worker.configure", workerId, leaseId: null, occurredAt: new Date().toISOString(), payload };
+  try {
+    const applying = executeWindowsWorkerCommand(command, context);
+    await Promise.resolve();
+    expect(switches).toBe(0);
+    expect(identity.selectedDriver).toBe("windows-hyperv-container");
+    expect(sent).toEqual([]);
+    activeLeases.clear();
+    finish();
+    await applying;
+    expect(identity.selectedDriver).toBe("windows-process-container");
+    expect(switches).toBe(1);
+    expect(sent.map(event => event.type)).toEqual(["worker.configured"]);
+    expect(sent[0]?.payload).toMatchObject({ commandId: command.id, revision: payload.revision, observed: { selectedDriver: "windows-process-container" } });
+
+    activeLeases.set("busy", Promise.withResolvers<void>().promise);
+    const replayId = "44444444-4444-4444-8444-444444444444";
+    await executeWindowsWorkerCommand({ ...command, id: replayId }, context);
+    expect(sent[1]?.type).toBe("worker.configured");
+    expect(sent[1]?.payload).toMatchObject({ commandId: replayId, revision: payload.revision });
+    expect(probes).toBe(1);
+    expect(switches).toBe(1);
+  } finally {
+    activeLeases.clear();
+    finish();
+    if (previousIdentity === undefined) delete Bun.env.MARS_WORKER_IDENTITY_FILE;
+    else Bun.env.MARS_WORKER_IDENTITY_FILE = previousIdentity;
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("purges the Windows runner cache before acknowledging", async () => {

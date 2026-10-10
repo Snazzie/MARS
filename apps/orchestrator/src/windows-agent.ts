@@ -377,7 +377,12 @@ type WindowsWorkerCommandContext = {
   acceptingLeases?: () => boolean;
   send: (event: WorkerEvent) => void;
   sendDoctor: () => void;
+  hostPlatform?: WindowsHostPlatform;
+  collectDoctor?: typeof windowsDoctor;
 };
+
+// Process-local evidence: persisted identity alone does not prove live limits/cache were applied.
+const windowsConfigurations = new WeakMap<Identity, { tail: Promise<void>; changing?: boolean; applied?: { revision: string; observed: WorkerObservedConfiguration } }>();
 
 
 const normalizedError = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -410,27 +415,47 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
   }
   if (command.type === "worker.configure") {
     const payload = WorkerConfigurePayload.parse(command.payload);
-    try {
-      if (activeLeases.size) throw new Error("Cannot change Windows runtime while leases are active");
-      const selectedDriver = payload.selectedDriver ?? legacyRuntimeDriver("windows-x64", "container");
-      const capabilities = (await windowsDoctor(identity.preserveLeases === true)).capabilities ?? [];
-      const capability = capabilities.find((entry) => entry.driver === selectedDriver && entry.guestPlatform === payload.guestPlatforms[0]);
-      if (!isRuntimeSelection(selectedDriver)) throw new Error("Selected Windows runtime driver is unsupported");
-      if (!capability?.ready) throw new Error("Selected Windows runtime capability is not ready");
-      const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService);
-      if (identity.selectedDriver !== selectedDriver || identity.guestPlatform !== payload.guestPlatforms[0]) {
-        if (!applyDriver) throw new Error("Runtime driver switching is unavailable");
-        await applyDriver(selectedDriver, payload.guestPlatforms[0]!);
-      }
-      identity.selectedDriver = selectedDriver;
-      identity.guestPlatform = payload.guestPlatforms[0];
-      await save(identity);
-      send(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed }));
-      sendDoctor();
-    } catch (error) {
-      send(event(command.workerId, "worker.configuration_failed", { commandId: command.id, workerId: command.workerId, revision: payload.revision, reason: normalizedError(error) }));
+    let state = windowsConfigurations.get(identity);
+    if (!state) {
+      state = { tail: Promise.resolve() };
+      windowsConfigurations.set(identity, state);
     }
-    return;
+    const configuration = state;
+    const pending = configuration.tail.then(async () => {
+      try {
+        if (configuration.applied?.revision === payload.revision) {
+          send(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed: configuration.applied.observed }));
+          sendDoctor();
+          return;
+        }
+        // Keep the command pending while jobs finish; do not poison admission with a busy error.
+        configuration.changing = true;
+        while (activeLeases.size) await Promise.allSettled(activeLeases.values());
+        const selectedDriver = payload.selectedDriver ?? legacyRuntimeDriver("windows-x64", "container");
+        const capabilities = (await (context.collectDoctor ?? windowsDoctor)(identity.preserveLeases === true)).capabilities ?? [];
+        const capability = capabilities.find((entry) => entry.driver === selectedDriver && entry.guestPlatform === payload.guestPlatforms[0]);
+        if (!isRuntimeSelection(selectedDriver)) throw new Error("Selected Windows runtime driver is unsupported");
+        if (!capability?.ready) throw new Error("Selected Windows runtime capability is not ready");
+        configuration.applied = undefined;
+        const observed = await applyWindowsWorkerConfiguration(limits, cache, payload, cacheService, context.hostPlatform);
+        if (identity.selectedDriver !== selectedDriver || identity.guestPlatform !== payload.guestPlatforms[0]) {
+          if (!applyDriver) throw new Error("Runtime driver switching is unavailable");
+          await applyDriver(selectedDriver, payload.guestPlatforms[0]!);
+        }
+        identity.selectedDriver = selectedDriver;
+        identity.guestPlatform = payload.guestPlatforms[0];
+        await save(identity);
+        configuration.applied = { revision: payload.revision, observed };
+        send(event(command.workerId, "worker.configured", { commandId: command.id, workerId: command.workerId, revision: payload.revision, observed }));
+        sendDoctor();
+      } catch (error) {
+        send(event(command.workerId, "worker.configuration_failed", { commandId: command.id, workerId: command.workerId, revision: payload.revision, reason: normalizedError(error) }));
+      } finally {
+        configuration.changing = false;
+      }
+    });
+    configuration.tail = pending.catch(() => undefined);
+    return pending;
   }
   if (command.type === "worker.runner_cache_purge") {
     return send(await applyWindowsRunnerCachePurge(command, cacheService));
@@ -452,8 +477,8 @@ export async function executeWindowsWorkerCommand(command: WorkerCommand, contex
     if (!cipher) throw new Error("lease bootstrap payload invalid");
     const bootstrap: LeaseBootstrapEnvelope = openLeaseBootstrap(cipher, identity.encryptionPrivateKey);
     if (bootstrap.guestPlatform !== identity.guestPlatform) throw new Error("Lease guest platform does not match selected Windows runtime");
-    if (acceptingLeases && !acceptingLeases()) {
-      return send(event(command.workerId, "lease.declined", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, reason: "pickup_paused" }));
+    if (windowsConfigurations.get(identity)?.changing || (acceptingLeases && !acceptingLeases())) {
+      return send(event(command.workerId, "lease.declined", { commandId: command.id, leaseId: command.leaseId, nonce: bootstrap.nonce, reason: windowsConfigurations.get(identity)?.changing ? "configuration_applying" : "pickup_paused" }));
     }
     send(event(command.workerId, "command.accepted", { commandId: command.id, leaseId: command.leaseId }));
     await startWindowsLeaseLifecycle(command, driver, bootstrap, send, activeLeases, () => identity.preserveLeases === true, cache.runnerCacheEnabled ? cacheService : undefined, sendDoctor);
@@ -610,6 +635,7 @@ async function runWindowsWorkerWithCache(baseUrl: string, limits: Limits, cache:
                 applyDriver,
                 acceptingLeases: () => pickupState.acceptingLeases,
                 identity,
+                hostPlatform,
                 activeLeases,
                 send: workerEvent => { if (developmentConsole) logDevelopmentWorkerEvent(workerEvent); eventTransport.send(workerEvent); },
                 sendDoctor: () => { void sendDoctor(ws); },
