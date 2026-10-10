@@ -133,6 +133,9 @@ integration("AI work queue preserves attempt identity, paginates tied enqueue ti
       await insert(skipped, "skipped", 3);
       await insert(crypto.randomUUID(), "pending", 1, otherOrg, otherRepo, otherRun);
       await insert(crypto.randomUUID(), "completed", 2, otherOrg, otherRepo, otherRun);
+      const result = { summary: "Attempt one result", failures: [] };
+      await tx.$client.unsafe("UPDATE pipeline_failure_analyses SET result=$2::jsonb WHERE id=$1", [completed, JSON.stringify(result)]);
+      await tx.$client.unsafe("INSERT INTO pipeline_analysis_comments (analysis_id,pr_number,state,comment_url,comment_body) VALUES ($1,42,'published','https://github.com/acme/project/pull/42#issuecomment-7','Exact posted text')", [completed]);
       await tx.$client.unsafe("UPDATE pipeline_failure_analyses SET started_at='2026-10-09T00:00:05Z', finished_at='2026-10-09T00:00:25Z', provider_called_at='2026-10-09T00:00:08Z', input_tokens=1200, output_tokens=400, input_usd_per_million_tokens=2, output_usd_per_million_tokens=10 WHERE id=$1", [completed]);
       const first = await listPipelineAnalysisWork(tx, { userId: user }, 1);
       expect(first.nextCursor).toBe(queued);
@@ -158,12 +161,15 @@ integration("AI work queue preserves attempt identity, paginates tied enqueue ti
         usage: { input: 1200, output: 400, total: 1600 },
       });
       expect(older.items[0]!.metrics.estimatedCostUsd).toBeCloseTo(0.0064, 10);
+      expect(older.items[0]!.result).toEqual(result);
+      expect(older.items[0]!.comments).toMatchObject([{ prNumber: 42, state: "published", commentUrl: "https://github.com/acme/project/pull/42#issuecomment-7", commentBody: "Exact posted text" }]);
       expect((await listPipelineAnalysisWork(tx, { userId: crypto.randomUUID() }, 50, null, "history")).items).toEqual([]);
       // Current run is attempt 6: its metrics must not come from completed attempt 1.
       expect((await getRunDetail(tx, org, run))?.failureAnalysis?.runAttempt).toBe(6);
       expect((await getRunDetail(tx, org, run))?.failureAnalysis?.metrics.usage.total).toBeNull();
       await tx.$client.unsafe("UPDATE dashboard_runs SET run_attempt=1 WHERE id=$1", [run]);
       expect((await getRunDetail(tx, org, run))?.failureAnalysis?.metrics).toEqual(older.items[0]!.metrics);
+      expect((await getRunDetail(tx, org, run))?.failureAnalysis).toMatchObject({ runAttempt: 1, result, comments: [{ commentBody: "Exact posted text" }] });
       await tx.$client.unsafe("UPDATE pipeline_failure_analyses SET state='completed' WHERE id=$1", [queued]);
       expect((await listPipelineAnalysisWork(tx, { userId: user })).items.map(item => item.id)).toEqual([running]);
     });

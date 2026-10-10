@@ -85,6 +85,13 @@
       "when": 1791592510192,
       "tag": "0011_blue_centennial",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791597179764,
+      "tag": "0012_opposite_pet_avengers",
+      "breakpoints": true
     }
   ]
 }

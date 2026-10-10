@@ -108,8 +108,11 @@ function FailureAnalysisPanel({ data }: { data: RunDetail }) {
       </>}
       {analysis.errorCode && <p>Analysis unavailable: {analysis.errorCode.replaceAll("_", " ")}</p>}
       {analysis.state === "skipped" && <p>Analysis skipped: {analysis.errorCode?.replaceAll("_", " ") ?? "not applicable"}.</p>}
-      {analysis.comments.length > 0 ? <div><h3>Pull request feedback</h3><ul>{analysis.comments.map((comment) => <li key={comment.prNumber}>
-        PR #{comment.prNumber}: {comment.state.replaceAll("_", " ")}{comment.commentUrl ? <> — <a href={comment.commentUrl} target="_blank" rel="noreferrer">View comment</a></> : ""}{comment.errorCode ? ` (${comment.errorCode.replaceAll("_", " ")})` : ""}
+      {analysis.comments.length > 0 ? <div><h3>Pull request feedback</h3><ul>{analysis.comments.map(comment => <li key={comment.prNumber}>
+        PR #{comment.prNumber}: {comment.state.replaceAll("_", " ")}
+        {comment.commentUrl ? <> — <a href={comment.commentUrl} target="_blank" rel="noreferrer">View comment</a></> : ""}
+        {comment.commentBody ? <details><summary>{comment.state === "published" ? "Posted comment" : "Submitted comment body"}</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{comment.commentBody}</pre></details> : <p>Comment body unavailable{comment.commentUrl ? "; view the GitHub comment." : "."}</p>}
+        {comment.errorCode ? <p>Publishing error: {comment.errorCode.replaceAll("_", " ")}</p> : ""}
       </li>)}</ul></div> : analysis.state === "completed" && <p>No associated pull request.</p>}
     </>}
   </section>;

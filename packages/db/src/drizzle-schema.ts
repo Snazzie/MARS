@@ -544,6 +544,7 @@ export const pipelineAnalysisComments = pgTable("pipeline_analysis_comments", {
 	commentId: bigint("comment_id", { mode: "number" }),
 	commentUrl: text("comment_url"),
 	errorCode: text("error_code"),
+	commentBody: text("comment_body"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

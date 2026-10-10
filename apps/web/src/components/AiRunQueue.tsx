@@ -33,6 +33,14 @@ export function AiRunQueue({ organizationId }: { organizationId: string }) {
           </Link>
           <AiAnalysisMetrics metrics={item.metrics} />
           {item.errorCode && <p className="ai-run-error">{item.errorCode.replaceAll("_", " ")}</p>}
+          {item.result && <details className="ai-run-result"><summary>Analysis result</summary><p>{item.result.summary}</p>{item.result.failures.map((failure, index) => <article key={`${failure.jobId}-${failure.stepNumber ?? "job"}-${index}`}><strong>Job {failure.jobId}{failure.stepNumber === null ? "" : ` · Step ${failure.stepNumber}`}</strong><p>{failure.explanation}</p>{failure.evidence.length > 0 && <><strong>Evidence</strong><ul>{failure.evidence.map((evidence, evidenceIndex) => <li key={evidenceIndex}><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{evidence}</pre></li>)}</ul></>}<strong>Potential fix</strong><p>{failure.suggestedFix}</p></article>)}</details>}
+          {item.comments.length > 0 && <div className="ai-run-comments"><strong>Pull request feedback</strong><ul>{item.comments.map(comment => <li key={comment.prNumber}>
+            PR #{comment.prNumber} · {comment.state.replaceAll("_", " ")}
+            {comment.commentUrl && <> — <a href={comment.commentUrl} target="_blank" rel="noreferrer">View comment</a></>}
+            {comment.commentBody ? <details><summary>{comment.state === "published" ? "Posted comment" : "Submitted comment body"}</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{comment.commentBody}</pre></details> : <p>Comment body unavailable{comment.commentUrl ? "; view the GitHub comment." : "."}</p>}
+            {comment.errorCode && <p>Publishing error: {comment.errorCode.replaceAll("_", " ")}</p>}
+          </li>)}</ul></div>}
+          {item.state === "completed" && item.comments.length === 0 && <p>No associated pull request.</p>}
         </li>)}
       </ul>}
       {query.hasNextPage && <button type="button" className="button secondary" onClick={() => void query.fetchNextPage()} disabled={query.isFetchingNextPage}>{query.isFetchingNextPage ? "Loading…" : "Load more AI work"}</button>}

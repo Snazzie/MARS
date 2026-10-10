@@ -115,7 +115,7 @@ export async function initializeControlPlaneSetup(db: DatabaseClient, dataRoot: 
         const user = users[0]; if (!user) throw new Error("setup_authenticate_failed");
         if (rows[0].setupCompletedAt) {
           const organizationIds = organizations.map((organization) => organization.id);
-          await queries.deleteUnauthorizedMemberships.execute({ userId: user.id, organizationIds });
+          await queries.deleteUnauthorizedMemberships.execute({ userId: user.id, organizationIds: JSON.stringify(organizationIds) });
           for (const organizationId of organizationIds) await queries.addMembership.execute({ organizationId, userId: user.id });
           return { userId: user.id, firstAdmin: false };
         }

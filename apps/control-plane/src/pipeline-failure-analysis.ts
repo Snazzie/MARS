@@ -51,10 +51,10 @@ const queries = defineQueries(db => {
     comments: db.select({ prNumber: c.prNumber, state: c.state }).from(c).where(eq(c.analysisId, p("analysisId"))).orderBy(asc(c.prNumber)).prepare("pipeline_analysis_comments_list"),
     addComment: db.insert(c).values({ analysisId: p("analysisId"), prNumber: p("prNumber"), state: "pending" }).onConflictDoNothing().prepare("pipeline_analysis_comment_insert"),
     claimComment: db.update(c).set({ state: "publishing", errorCode: null, updatedAt: sql`now()` }).where(and(eq(c.analysisId, p("analysisId")), eq(c.prNumber, p("prNumber")), eq(c.state, "pending"))).returning({ prNumber: c.prNumber }).prepare("pipeline_analysis_comment_claim"),
-    commentState: db.update(c).set({ state: sql`${p("state")}`, commentId: sql`${p("commentId")}`, commentUrl: sql`${p("commentUrl")}`, errorCode: sql`${p("errorCode")}`, updatedAt: sql`now()` }).where(and(eq(c.analysisId, p("analysisId")), eq(c.prNumber, p("prNumber")), eq(c.state, p("expectedState")))).prepare("pipeline_analysis_comment_state"),
+    commentState: db.update(c).set({ state: sql`${p("state")}`, commentId: sql`${p("commentId")}`, commentUrl: sql`${p("commentUrl")}`, commentBody: sql`${p("commentBody")}`, errorCode: sql`${p("errorCode")}`, updatedAt: sql`now()` }).where(and(eq(c.analysisId, p("analysisId")), eq(c.prNumber, p("prNumber")), eq(c.state, p("expectedState")))).prepare("pipeline_analysis_comment_state"),
     unknownComments: db.update(c).set({ state: "unknown", errorCode: "github_post_outcome_unknown", updatedAt: sql`now()` }).where(and(eq(c.state, "publishing"), sql`${c.updatedAt} < now()-interval '5 minutes'`)).prepare("pipeline_analysis_comments_interrupted"),
     unknownCommentRows: db.select({ analysisId: a.id, prNumber: c.prNumber, githubRunId: a.githubRunId, runAttempt: a.runAttempt, source: a.source, fullName: repo.fullName, installationId: schema.dashboardInstallations.githubInstallationId, available: repo.available, enabled, installState: schema.dashboardInstallations.state }).from(c).innerJoin(a, eq(a.id, c.analysisId)).innerJoin(repo, and(eq(repo.id, a.repositoryId), eq(repo.organizationId, a.organizationId))).innerJoin(schema.dashboardInstallations, and(eq(schema.dashboardInstallations.id, repo.installationId), eq(schema.dashboardInstallations.organizationId, repo.organizationId))).leftJoin(settings, and(eq(settings.organizationId, a.organizationId), eq(settings.repositoryId, repo.id))).where(and(eq(a.state, "completed"), eq(c.state, "unknown"))).prepare("pipeline_analysis_unknown_comments"),
-    adoptUnknown: db.update(c).set({ state: "published", commentId: sql`${p("commentId")}`, commentUrl: sql`${p("commentUrl")}`, errorCode: null, updatedAt: sql`now()` }).where(and(eq(c.analysisId, p("analysisId")), eq(c.prNumber, p("prNumber")), eq(c.state, "unknown"))).prepare("pipeline_analysis_adopt_unknown"),
+    adoptUnknown: db.update(c).set({ state: "published", commentId: sql`${p("commentId")}`, commentUrl: sql`${p("commentUrl")}`, commentBody: sql`${p("commentBody")}`, errorCode: null, updatedAt: sql`now()` }).where(and(eq(c.analysisId, p("analysisId")), eq(c.prNumber, p("prNumber")), eq(c.state, "unknown"))).prepare("pipeline_analysis_adopt_unknown"),
   };
 });
 
@@ -227,28 +227,28 @@ async function publish(deps: PipelineFailureAnalysisDeps, analysis: Record<strin
     const [comment] = await queries(deps.db).claimComment.execute({ analysisId: String(analysis.id), prNumber: pr.number });
     if (!comment) continue;
     try {
-      let page = 1, found: { id: number; url: string } | null = null;
+      let page = 1, found: { id: number; url: string; body: string } | null = null;
       for (;;) {
         const comments = await client.listPullRequestComments(owner, repo, pr.number, page++);
         const match = comments.find(item => item.body.includes(`<!-- ${marker} -->`) && item.appId === deps.githubAppId);
-        if (match) { found = { id: match.id, url: match.url }; break; }
+        if (match) { found = { id: match.id, url: match.url, body: match.body }; break; }
         if (comments.length < 100) break;
       }
-      if (found) { await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "published", commentId: found.id, commentUrl: found.url, errorCode: null }); continue; }
+      if (found) { await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "published", commentId: found.id, commentUrl: found.url, commentBody: found.body, errorCode: null }); continue; }
       if ((await queries(deps.db).superseded.execute({ id: String(analysis.id) })).length || await hasNewerGithubRun(client, owner, repo, analysis)) {
-        await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "failed", commentId: null, commentUrl: null, errorCode: "analysis_superseded" });
+        await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "failed", commentId: null, commentUrl: null, commentBody: null, errorCode: "analysis_superseded" });
         continue;
       }
       const body = renderComment(result, source, marker);
       try {
         const created = await client.createPullRequestComment(owner, repo, pr.number, body);
-        await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "published", commentId: created.id, commentUrl: created.url, errorCode: null });
+        await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "published", commentId: created.id, commentUrl: created.url, commentBody: body, errorCode: null });
       } catch (error) {
         const code = safeErrorCode(error), ambiguous = !(error instanceof Error && /^github_(?:401|403|404|410|422|429)$/.test(error.message));
-        await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: ambiguous ? "unknown" : "failed", commentId: null, commentUrl: null, errorCode: ambiguous ? "github_post_outcome_unknown" : code });
+        await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: ambiguous ? "unknown" : "failed", commentId: null, commentUrl: null, commentBody: body, errorCode: ambiguous ? "github_post_outcome_unknown" : code });
       }
     } catch (error) {
-      await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "failed", commentId: null, commentUrl: null, errorCode: safeErrorCode(error) });
+      await queries(deps.db).commentState.execute({ analysisId: String(analysis.id), prNumber: pr.number, expectedState: "publishing", state: "failed", commentId: null, commentUrl: null, commentBody: null, errorCode: safeErrorCode(error) });
     }
   }
 }
@@ -269,7 +269,7 @@ async function adoptUnknownComments(deps: PipelineFailureAnalysisDeps): Promise<
         const comments = await client.listPullRequestComments(owner, repo, Number(row.prNumber), page++);
         const match = comments.find(comment => comment.body.includes(`<!-- ${marker} -->`) && comment.appId === deps.githubAppId);
         if (match) {
-          await queries(deps.db).adoptUnknown.execute({ analysisId: String(row.analysisId), prNumber: Number(row.prNumber), commentId: match.id, commentUrl: match.url });
+          await queries(deps.db).adoptUnknown.execute({ analysisId: String(row.analysisId), prNumber: Number(row.prNumber), commentId: match.id, commentUrl: match.url, commentBody: match.body });
           break;
         }
         if (comments.length < 100) break;

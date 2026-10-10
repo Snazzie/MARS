@@ -22,7 +22,7 @@ async function fixture(work: (db: DatabaseClient) => Promise<void>) {
   try {
     await db.transaction(async tx => {
       // Connection-local copies preserve PostgreSQL constraints without touching application data.
-      for (const table of ["dashboard_installations", "dashboard_repositories", "dashboard_runs", "dashboard_jobs", "dashboard_job_steps", "dashboard_step_log_chunks", "dashboard_log_chunks", "llm_providers", "global_failure_analysis_settings", "repository_failure_analysis_settings", "pipeline_failure_analyses", "pipeline_analysis_comments"]) {
+      for (const table of ["dashboard_installations", "dashboard_repositories", "dashboard_runs", "dashboard_jobs", "dashboard_job_steps", "dashboard_step_log_chunks", "dashboard_log_chunks", "llm_providers", "global_failure_analysis_settings", "repository_failure_analysis_settings", "pipeline_failure_analyses", "pipeline_analysis_comments", "pr_reviews"]) {
         await tx.$client.unsafe(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING DEFAULTS INCLUDING INDEXES INCLUDING CONSTRAINTS) ON COMMIT DROP`);
       }
       await tx.insert(schema.dashboardInstallations).values({ id: installation, organizationId: org, githubInstallationId: 1, state: "approved" });
@@ -137,6 +137,34 @@ integration("a newer run during comment lookup prevents posting obsolete PR feed
   await processPipelineFailureAnalyses(deps);
   expect(posts).toBe(0);
   expect((await db.select().from(schema.pipelineAnalysisComments))[0]).toMatchObject({ state: "failed", errorCode: "analysis_superseded", commentId: null });
+}));
+
+integration.each(["posted", "adopted", "unknown"] as const)("history preserves the exact %s comment body", mode => fixture(async db => {
+  await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
+  await enqueuePipelineFailureAnalysis({ db, organizationId: org, repositoryId: repo, run, jobs: [failedJob()] });
+  const deps = worker(db, []);
+  const github = deps.githubFetchForInstallation(1);
+  const adoptedBody = "<!-- mars-failure-analysis:8:812:1 -->\nPreviously posted exact text";
+  let submittedBody: string | null = null;
+  deps.githubFetchForInstallation = () => (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith("/actions/runs/812")) return Response.json({ pull_requests: [{ number: 3, base: { repo: { id: 8 } } }] });
+    if (path.endsWith("/issues/3/comments")) {
+      if (init?.method === "POST") {
+        submittedBody = JSON.parse(String(init.body)).body;
+        if (mode === "unknown") throw new Error("connection lost after POST");
+        return Response.json({ id: 42, html_url: "https://github.com/acme/repo/issues/3#issuecomment-42" });
+      }
+      return Response.json(mode === "adopted" ? [{ id: 42, html_url: "https://github.com/acme/repo/issues/3#issuecomment-42", body: adoptedBody, performed_via_github_app: { id: 1 } }] : []);
+    }
+    return github(input, init);
+  }) as typeof fetch;
+  await processPipelineFailureAnalyses(deps);
+  const [comment] = await db.select().from(schema.pipelineAnalysisComments);
+  expect(comment!.state).toBe(mode === "unknown" ? "unknown" : "published");
+  expect(comment!.commentBody).toBe(mode === "adopted" ? adoptedBody : submittedBody);
+  if (mode === "adopted") expect(submittedBody).toBeNull();
+  else expect(comment!.commentBody).toContain("Assertion failed");
 }));
 
 integration("failed generated analysis retains reported usage and queued pricing snapshots", () => fixture(async db => {

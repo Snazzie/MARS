@@ -1,0 +1,1 @@
+ALTER TABLE "pipeline_analysis_comments" ADD COLUMN "comment_body" text;

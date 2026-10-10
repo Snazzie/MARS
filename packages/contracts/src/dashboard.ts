@@ -154,11 +154,31 @@ export const PipelineAnalysisMetrics = dto(strict({
   estimatedCostUsd: z.number().nonnegative().finite().nullable(),
 }));
 export type PipelineAnalysisMetrics = z.infer<typeof PipelineAnalysisMetrics>;
+export const PipelineAnalysisResult = dto(strict({
+  summary: z.string().max(2000),
+  failures: z.array(strict({
+    jobId: positiveSafe,
+    stepNumber: z.number().int().positive().nullable(),
+    explanation: z.string().max(2000),
+    evidence: z.array(z.string().max(500)).max(3),
+    suggestedFix: z.string().max(2000),
+  })).max(20),
+}));
+export type PipelineAnalysisResult = z.infer<typeof PipelineAnalysisResult>;
+
 export const PipelineAnalysisWork = dto(strict({
   id, organizationId, repositoryId: id, repositoryName: z.string().min(1),
   runId: id, runNumber: positiveSafe, runAttempt: positiveSafe,
   workflowName: z.string().min(1), state: pipelineAnalysisState,
   providerName: z.string().min(1), model: z.string().min(1),
+  result: PipelineAnalysisResult.nullable(),
+  comments: z.array(strict({
+    prNumber: positiveSafe,
+    state: z.enum(["pending", "publishing", "published", "failed", "unknown"]),
+    commentUrl: z.string().url().nullable(),
+    commentBody: z.string().nullable(),
+    errorCode: z.string().min(1).nullable(),
+  })),
   metrics: PipelineAnalysisMetrics, errorCode: z.string().min(1).nullable(),
 }));
 export type PipelineAnalysisWork = z.infer<typeof PipelineAnalysisWork>;
@@ -286,17 +306,6 @@ export const PrReviewSummary = strict({
 });
 export type PrReviewSummary = z.infer<typeof PrReviewSummary>;
 
-export const PipelineAnalysisResult = dto(strict({
-  summary: z.string().max(2000),
-  failures: z.array(strict({
-    jobId: positiveSafe,
-    stepNumber: z.number().int().positive().nullable(),
-    explanation: z.string().max(2000),
-    evidence: z.array(z.string().max(500)).max(3),
-    suggestedFix: z.string().max(2000),
-  })).max(20),
-}));
-export type PipelineAnalysisResult = z.infer<typeof PipelineAnalysisResult>;
 export const PipelineFailureAnalysis = dto(strict({
   id,
   runAttempt: positiveSafe,
@@ -310,6 +319,7 @@ export const PipelineFailureAnalysis = dto(strict({
     prNumber: positiveSafe,
     state: z.enum(["pending", "publishing", "published", "failed", "unknown"]),
     commentUrl: z.string().url().nullable(),
+    commentBody: z.string().nullable(),
     errorCode: z.string().min(1).nullable(),
   })),
 }));
