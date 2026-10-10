@@ -1540,7 +1540,6 @@ a:active {
 .ai-performance-metric dd{font-size:1.4rem;margin:4px 0 0;line-height:1.2}
 @media(max-width:900px){.ai-observe-widgets{grid-template-columns:1fr}}
 .ai-provider-select{max-width:420px}
-.ai-consent{color:var(--ui-text-muted);max-width:760px}
 .ai-empty{border:1px dashed var(--ui-border);border-radius:var(--radius);padding:24px;color:var(--ui-text-muted);line-height:1.6}
 .ai-empty p{margin-bottom:0}
 .ai-warning{color:var(--ui-warning);font-size:.82rem;line-height:1.6;margin:0}

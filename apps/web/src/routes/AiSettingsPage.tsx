@@ -49,10 +49,10 @@ export function AiSettingsPage() {
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   if (me.isLoading || me.error) return <QueryState isLoading={me.isLoading} error={me.error} retry={() => void me.refetch()} operationLabel="AI settings access" />;
   if (!me.data?.isGlobalAdmin) return <section className="ai-settings"><header className="page-header"><p className="eyebrow">Deployment configuration</p><h1>AI Settings</h1><p>Only global administrators can manage AI providers and repository access.</p></header></section>;
-  return <AiSettings operatorId={me.data.id} />;
+  return <AiSettings />;
 }
 
-function AiSettings({ operatorId }: { operatorId: string }) {
+function AiSettings() {
   const client = useQueryClient();
   const organizationsQuery = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations });
   const organizations = organizationsQuery.data ?? [];
@@ -75,11 +75,6 @@ function AiSettings({ operatorId }: { operatorId: string }) {
   const [outputPrice, setOutputPrice] = useState("");
   const [clearKey, setClearKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [acknowledged, setAcknowledged] = useState(false);
-  const prConsentStorageKey = `mars.pr-review-consent.${operatorId}`;
-  const [prConsentScope, setPrConsentScope] = useState<string | null>(() => {
-    try { return sessionStorage.getItem(prConsentStorageKey); } catch { return null; }
-  });
   const [saving, setSaving] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -151,23 +146,6 @@ function AiSettings({ operatorId }: { operatorId: string }) {
   const accessBlocked = updateSetting.isPending || updateRepositories.isPending || updateGlobalSetting.isPending || updateGlobalPrSetting.isPending || globalSettings.isFetching || !!globalSettings.error || globalPrSettings.isFetching || !!globalPrSettings.error || providers.isFetching || !!providers.error || organizationsQuery.isFetching || !!organizationsQuery.error || repositories.some((query) => query.isFetching || !!query.error);
   const providerReady = !!sharedProviderId && providerRows.some((provider) => provider.id === sharedProviderId);
   const globalPrProviderReady = !!globalPrProviderId && providerRows.some((provider) => provider.id === globalPrProviderId);
-  const currentPrConsentScope = providers.data && globalPrSettings.data && organizationsQuery.data && repositories.every(query => query.data)
-    ? JSON.stringify([
-      operatorId,
-      providerRows.map(provider => [provider.id, provider.kind, provider.baseUrl, provider.model]).sort(),
-      globalPrProviderId,
-      repositoryRows.map(row => [row.repository.id, row.prReview.providerId]).sort(),
-    ])
-    : null;
-  const prAcknowledged = currentPrConsentScope !== null && prConsentScope === currentPrConsentScope;
-  const setPrAcknowledged = (checked: boolean) => {
-    const scope = checked ? currentPrConsentScope : null;
-    setPrConsentScope(scope);
-    try {
-      if (scope === null) sessionStorage.removeItem(prConsentStorageKey);
-      else sessionStorage.setItem(prConsentStorageKey, scope);
-    } catch { /* Consent remains usable when browser storage is unavailable. */ }
-  };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(null); setSaving(true);
     try {
@@ -228,16 +206,14 @@ function AiSettings({ operatorId }: { operatorId: string }) {
     <section className="ai-section" aria-labelledby="ai-repositories-title">
       <div><p className="eyebrow">02 / Enable</p><h2 id="ai-repositories-title">Repository access</h2><p className="form-help">All repositories use the same provider and model. Only newly completed failures are analyzed; successful runs are unchanged.</p></div>
       <div className="settings-actions">
-        <label className="ai-provider-select">Analysis provider for all repositories<select value={sharedProviderId} disabled={accessBlocked} onChange={(event) => { setError(null); setAcknowledged(false); updateRepositories.mutate({ providerId: event.target.value }); }}><option value="" disabled>Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label>
-        <label className="ai-checkbox"><input type="checkbox" checked={enableAll} disabled={accessBlocked || (!enableAll && (!providerReady || !acknowledged))} onChange={(event) => { setError(null); updateGlobalSetting.mutate(event.target.checked); }} />Enable all</label>
+        <label className="ai-provider-select">Analysis provider for all repositories<select value={sharedProviderId} disabled={accessBlocked} onChange={(event) => { setError(null); updateRepositories.mutate({ providerId: event.target.value }); }}><option value="" disabled>Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label>
+        <label className="ai-checkbox"><input type="checkbox" checked={enableAll} disabled={accessBlocked || (!enableAll && !providerReady)} onChange={(event) => { setError(null); updateGlobalSetting.mutate(event.target.checked); }} />Enable all</label>
       </div>
       {selectedProviderIds.size > 1 && <p className="ai-warning">Repositories currently use different providers. Select one profile to apply it to all repositories.</p>}
-      <label className="ai-checkbox ai-consent"><input type="checkbox" checked={acknowledged} disabled={accessBlocked || !providerReady} onChange={(event) => setAcknowledged(event.target.checked)} />I acknowledge failed log excerpts will be sent to the selected endpoint and generated feedback posted on associated pull requests.</label>
       <div className="ai-warning"><strong>Pull request review is a separate opt-in.</strong> When enabled for a repository or through Enable all PR reviews, source code and PR metadata—including private-repository content and changes originating from forks—are sent to the selected PR review provider profile. Enabling is prospective: existing PRs are not backfilled; the next eligible PR event triggers review. MARS publishes advisory COMMENT reviews only; it never commits, pushes, applies suggestions, merges, or blocks CI.</div>
-      <label className="ai-checkbox ai-consent"><input type="checkbox" checked={prAcknowledged} disabled={accessBlocked || !providerRows.length} onChange={(event) => setPrAcknowledged(event.target.checked)} />I acknowledge source code and PR metadata, including private repositories and fork changes, will be sent to the selected PR review provider.</label>
       <div className="settings-actions">
-        <label className="ai-provider-select">PR review provider for all repositories<select value={globalPrProviderId} disabled={accessBlocked || enableAllPrReviews} onChange={(event) => { setError(null); setPrAcknowledged(false); updateGlobalPrSetting.mutate({ enableAll: false, providerId: event.target.value }); }}><option value="" disabled>Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label>
-        <label className="ai-checkbox"><input type="checkbox" checked={enableAllPrReviews} disabled={accessBlocked || (!enableAllPrReviews && (!globalPrProviderReady || !prAcknowledged))} onChange={(event) => { setError(null); updateGlobalPrSetting.mutate({ enableAll: event.target.checked, providerId: globalPrProviderId || null }); }} />Enable all PR reviews</label>
+        <label className="ai-provider-select">PR review provider for all repositories<select value={globalPrProviderId} disabled={accessBlocked || enableAllPrReviews} onChange={(event) => { setError(null); updateGlobalPrSetting.mutate({ enableAll: false, providerId: event.target.value }); }}><option value="" disabled>Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label>
+        <label className="ai-checkbox"><input type="checkbox" checked={enableAllPrReviews} disabled={accessBlocked || (!enableAllPrReviews && !globalPrProviderReady)} onChange={(event) => { setError(null); updateGlobalPrSetting.mutate({ enableAll: event.target.checked, providerId: globalPrProviderId || null }); }} />Enable all PR reviews</label>
       </div>
       <QueryState isLoading={globalPrSettings.isLoading} error={globalPrSettings.error} retry={() => void globalPrSettings.refetch()} operationLabel="Enable all PR reviews settings" />
       <QueryState isLoading={globalSettings.isLoading} error={globalSettings.error} retry={() => void globalSettings.refetch()} operationLabel="Enable all settings" />
@@ -251,8 +227,8 @@ function AiSettings({ operatorId }: { operatorId: string }) {
           <th scope="row">{repository.fullName ?? repository.name}</th>
           <td>{workspace}</td>
           <td>{repository.available ? enableAll ? "Enabled by Enable all" : settings.enabled ? "Enabled" : "Disabled" : "Unavailable"}</td>
-          <td><label className="ai-checkbox"><input type="checkbox" checked={settings.enabled} disabled={accessBlocked || (!settings.enabled && (!repository.available || !providerReady || !acknowledged))} onChange={(event) => { setError(null); updateSetting.mutate({ organizationId, repositoryId: repository.id, enabled: event.target.checked, providerId: settings.enabled ? settings.providerId : sharedProviderId }); }} /><span className="sr-only">Enable analysis for {repository.fullName ?? repository.name}</span></label></td>
-          <td>{enableAllPrReviews && repository.available && <p className="form-help">Enabled by Enable all PR reviews</p>}<label className="ai-checkbox"><input type="checkbox" checked={prReview.enabled} disabled={accessBlocked || updatePrReview.isPending || enableAllPrReviews || (!prReview.enabled && (!repository.available || !providerRows.length || !prAcknowledged))} onChange={(event) => { setError(null); updatePrReview.mutate({ organizationId, repositoryId: repository.id, enabled: event.target.checked, providerId: prReview.providerId ?? providerRows[0]?.id ?? null }); }} /><span className="sr-only">Enable pull request review for {repository.fullName ?? repository.name}</span></label><label className="ai-provider-select">Provider<select value={enableAllPrReviews ? globalPrProviderId : prReview.providerId ?? ""} disabled={accessBlocked || updatePrReview.isPending || enableAllPrReviews} onChange={(event) => { setPrAcknowledged(false); updatePrReview.mutate({ organizationId, repositoryId: repository.id, enabled: prReview.enabled, providerId: event.target.value || null }); }}><option value="">Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label></td>
+          <td><label className="ai-checkbox"><input type="checkbox" checked={settings.enabled} disabled={accessBlocked || (!settings.enabled && (!repository.available || !providerReady))} onChange={(event) => { setError(null); updateSetting.mutate({ organizationId, repositoryId: repository.id, enabled: event.target.checked, providerId: settings.enabled ? settings.providerId : sharedProviderId }); }} /><span className="sr-only">Enable analysis for {repository.fullName ?? repository.name}</span></label></td>
+          <td>{enableAllPrReviews && repository.available && <p className="form-help">Enabled by Enable all PR reviews</p>}<label className="ai-checkbox"><input type="checkbox" checked={prReview.enabled} disabled={accessBlocked || updatePrReview.isPending || enableAllPrReviews || (!prReview.enabled && (!repository.available || !providerRows.length))} onChange={(event) => { setError(null); updatePrReview.mutate({ organizationId, repositoryId: repository.id, enabled: event.target.checked, providerId: prReview.providerId ?? providerRows[0]?.id ?? null }); }} /><span className="sr-only">Enable pull request review for {repository.fullName ?? repository.name}</span></label><label className="ai-provider-select">Provider<select value={enableAllPrReviews ? globalPrProviderId : prReview.providerId ?? ""} disabled={accessBlocked || updatePrReview.isPending || enableAllPrReviews} onChange={(event) => { updatePrReview.mutate({ organizationId, repositoryId: repository.id, enabled: prReview.enabled, providerId: event.target.value || null }); }}><option value="">Select profile</option>{providerRows.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} — {provider.model}</option>)}</select></label></td>
           <td>{latestPrReview ? <><strong>PR #{latestPrReview.prNumber}</strong> · {latestPrReview.analysisState} / {latestPrReview.publicationState}<br />Revision <code>{latestPrReview.headSha.slice(0, 12)}</code><br />Rules: {latestScope?.rules} · <span title={latestScope?.limitations}>Coverage: {latestScope?.coverage}</span><br />Usage: {latestPrReview.inputTokens ?? "?"} in / {latestPrReview.outputTokens ?? "?"} out · ${latestPrReview.estimatedCostUsd?.toFixed(6) ?? "unknown"}<br />{latestPrReview.errorCode && <span role="alert">Error: {latestPrReview.errorCode}<br /></span>}{latestPrReview.reviewUrl && <a href={latestPrReview.reviewUrl} target="_blank" rel="noreferrer">View GitHub review</a>}</> : "No reviews yet"}</td>
         </tr>)}</tbody>
       </table></div>

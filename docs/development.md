@@ -133,11 +133,12 @@ Pipeline failure analysis is configured in **Settings** by a global administrato
 Provider profiles are deployment-wide; use an API-root URL and model ID. Local
 OpenAI-compatible servers must be reachable from the control-plane host/container,
 not the browser. HTTP endpoints are permitted for local setups but expose prompts
-and responses in transit; use HTTPS for cloud providers. A repository opt-in
-acknowledges that bounded failed-job log excerpts are sent to the selected
-provider and that evidence-grounded AI suggestions may be published to associated
-pull requests by the installed MARS GitHub App. Only newly completed failures
-after opt-in are analyzed; no historical backfill or automatic retry is performed.
+and responses in transit; use HTTPS for cloud providers. Enabling repository analysis
+sends bounded failed-job log excerpts to the selected provider; evidence-grounded AI
+suggestions may be published to associated pull requests by the installed MARS GitHub
+App. Repository and global enablement require a configured provider, with no separate
+acknowledgement checkbox. Only newly completed failures after opt-in are analyzed;
+no historical backfill or automatic retry is performed.
 
 LM Studio profiles use the native server's model-discovery HTTP API and the official
 SDK's WebSocket model-management endpoint at the same API root (remove `/v1` and use
@@ -155,15 +156,12 @@ silently fall back to CPU. Load a fitting model with full offload in LM Studio.
 Pull-request review has independent repository opt-in and **Enable all PR reviews**
 controls in **Settings**; CI failure-analysis enablement never enables it.
 Both PR controls default off. Administrators select a saved PR provider separately.
-The global control requires a selected provider and source-sharing acknowledgement,
-overrides local PR selections for all available, approved repositories (including
-newly discovered ones), and preserves their individual settings. Turn it off to use
-local opt-ins again; turn it off before changing the global PR provider.
-The PR source-sharing acknowledgement is retained within the current browser tab
-across navigation and reloads. It is scoped to the operator, configured provider
-endpoints/models, and repository/global provider selections. Changing these requires
-fresh acknowledgement; closing the tab ends the saved acknowledgement. If browser
-storage is unavailable, acknowledgement lasts only until the page remounts.
+The global control requires a selected provider, overrides local PR selections for
+all available, approved repositories (including newly discovered ones), and preserves
+their individual settings. Turn it off to use local opt-ins again; turn it off before
+changing the global PR provider. Neither repository nor global PR enablement requires
+a separate source-sharing acknowledgement or browser consent state. The page retains
+the disclosure that PR source code and metadata are sent to the selected provider.
 Enabling is prospective and does not backfill open PRs.
 Eligible opened, reopened, ready-for-review, and synchronized revisions
 may be reviewed; drafts, closed PRs, and description-only changes are not reviewed.
