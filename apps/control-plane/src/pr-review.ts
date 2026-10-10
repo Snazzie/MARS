@@ -10,13 +10,20 @@ import { generatePrReview, type LlmProviderConfig, type PipelineAnalysisUsage } 
 const queries = defineQueries(db => {
   const a = schema.prReviews, r = schema.dashboardRepositories, i = schema.dashboardInstallations;
   const s = schema.repositoryPrReviewSettings, p = schema.llmProviders, placeholder = sql.placeholder;
-  const repository = db.select({ repositoryId: r.id, organizationId: r.organizationId, githubRepositoryId: r.githubRepositoryId, fullName: r.fullName, available: r.available, installationId: i.githubInstallationId, installState: i.state, enabled: s.enabled, providerId: s.providerId, enabledSince: s.enabledSince, settingsUpdatedAt: s.updatedAt, provider: p }).from(r)
+  const g = schema.globalPrReviewSettings;
+  const providerId = sql<string | null>`CASE WHEN ${g.enableAll} THEN ${g.providerId} ELSE ${s.providerId} END`;
+  const fields = { repositoryId: r.id, organizationId: r.organizationId, githubRepositoryId: r.githubRepositoryId, fullName: r.fullName, available: r.available, installationId: i.githubInstallationId, installState: i.state,
+    enabled: sql<boolean>`COALESCE(${g.enableAll}, false) OR COALESCE(${s.enabled}, false)`, providerId,
+    enabledSince: sql<string | null>`CASE WHEN ${g.enableAll} THEN LEAST(CASE WHEN ${s.enabled} THEN ${s.enabledSince} END, ${g.enabledSince}) ELSE ${s.enabledSince} END`,
+    settingsUpdatedAt: sql<string | null>`CASE WHEN ${g.enableAll} THEN ${g.updatedAt} ELSE ${s.updatedAt} END`, provider: p };
+  const repository = () => db.select(fields).from(r)
     .innerJoin(i, and(eq(i.id, r.installationId), eq(i.organizationId, r.organizationId)))
-    .leftJoin(s, and(eq(s.repositoryId, r.id), eq(s.organizationId, r.organizationId))).leftJoin(p, eq(p.id, s.providerId));
+    .leftJoin(s, and(eq(s.repositoryId, r.id), eq(s.organizationId, r.organizationId)))
+    .leftJoin(g, eq(g.singleton, true)).leftJoin(p, eq(p.id, providerId));
   return {
     delivery: db.select({ receivedAt: schema.webhookDeliveries.receivedAt }).from(schema.webhookDeliveries).where(eq(schema.webhookDeliveries.deliveryId, placeholder("deliveryId"))).limit(1).prepare("pr_review_delivery"),
-    repository: repository.where(and(eq(r.githubRepositoryId, placeholder("githubRepositoryId")), eq(i.githubInstallationId, placeholder("installationId")))).limit(1).prepare("pr_review_repository"),
-    repositoryById: db.select({ repositoryId: r.id, organizationId: r.organizationId, githubRepositoryId: r.githubRepositoryId, fullName: r.fullName, available: r.available, installationId: i.githubInstallationId, installState: i.state, enabled: s.enabled, providerId: s.providerId, enabledSince: s.enabledSince, settingsUpdatedAt: s.updatedAt, provider: p }).from(r).innerJoin(i, and(eq(i.id, r.installationId), eq(i.organizationId, r.organizationId))).leftJoin(s, and(eq(s.repositoryId, r.id), eq(s.organizationId, r.organizationId))).leftJoin(p, eq(p.id, s.providerId)).where(eq(r.id, placeholder("repositoryId"))).limit(1).prepare("pr_review_repository_by_id"),
+    repository: repository().where(and(eq(r.githubRepositoryId, placeholder("githubRepositoryId")), eq(i.githubInstallationId, placeholder("installationId")))).limit(1).prepare("pr_review_repository"),
+    repositoryById: repository().where(eq(r.id, placeholder("repositoryId"))).limit(1).prepare("pr_review_repository_by_id"),
     lockRepository: db.select({ id: r.id }).from(r).where(eq(r.id, placeholder("repositoryId"))).for("update").prepare("pr_review_lock_repository"),
     command: db.insert(schema.prReviewCommands).values({ organizationId: placeholder("organizationId"), repositoryId: placeholder("repositoryId"), commentId: placeholder("commentId"), requester: placeholder("requester") }).onConflictDoNothing().returning({ commentId: schema.prReviewCommands.commentId }).prepare("pr_review_command"),
     enqueue: db.insert(a).values({ organizationId: placeholder("organizationId"), repositoryId: placeholder("repositoryId"), prNumber: placeholder("prNumber"), baseSha: placeholder("baseSha"), headSha: placeholder("headSha"), trigger: placeholder("trigger"), commentId: placeholder("commentId"), requester: placeholder("requester"), providerId: placeholder("providerId"), providerSnapshot: placeholder("providerSnapshot"), settingsUpdatedAt: placeholder("settingsUpdatedAt"), analysisState: "pending", publicationState: "pending", source: placeholder("source") }).onConflictDoNothing().returning({ id: a.id }).prepare("pr_review_enqueue"),

@@ -442,6 +442,18 @@ export const repositoryFailureAnalysisSettings = pgTable("repository_failure_ana
 	check("repository_failure_analysis_settings_enabled_provider_check", sql`NOT enabled OR provider_id IS NOT NULL`),
 ]);
 
+export const globalPrReviewSettings = pgTable("global_pr_review_settings", {
+	singleton: boolean().default(true).primaryKey().notNull(),
+	enableAll: boolean("enable_all").default(false).notNull(),
+	providerId: uuid("provider_id"),
+	enabledSince: timestamp("enabled_since", { withTimezone: true, mode: 'string' }),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({ columns: [table.providerId], foreignColumns: [llmProviders.id], name: "global_pr_review_settings_provider_fkey" }).onDelete("restrict"),
+	check("global_pr_review_settings_singleton_check", sql`singleton`),
+	check("global_pr_review_settings_enabled_provider_check", sql`NOT enable_all OR (provider_id IS NOT NULL AND enabled_since IS NOT NULL)`),
+]);
+
 export const repositoryPrReviewSettings = pgTable("repository_pr_review_settings", {
 	organizationId: uuid("organization_id").notNull(),
 	repositoryId: uuid("repository_id").primaryKey().notNull(),

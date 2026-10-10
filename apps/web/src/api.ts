@@ -47,6 +47,8 @@ import {
   PrReviewSummary,
   GlobalFailureAnalysisSettings,
   GlobalFailureAnalysisSaveRequest,
+  GlobalPrReviewSettings,
+  GlobalPrReviewSaveRequest,
 } from "@mars/contracts";
 import {
   DashboardBootstrapReveal,
@@ -534,6 +536,12 @@ export const getGlobalFailureAnalysisSettings = () =>
   request("/api/admin/llm/failure-analysis", GlobalFailureAnalysisSettings, { cache: "no-store" });
 export const saveGlobalFailureAnalysisSettings = (input: GlobalFailureAnalysisSaveRequest) =>
   request("/api/admin/llm/failure-analysis", GlobalFailureAnalysisSettings, {
+    method: "PUT", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+export const getGlobalPrReviewSettings = () =>
+  request("/api/admin/llm/pr-review", GlobalPrReviewSettings, { cache: "no-store" });
+export const saveGlobalPrReviewSettings = (input: GlobalPrReviewSaveRequest) =>
+  request("/api/admin/llm/pr-review", GlobalPrReviewSettings, {
     method: "PUT", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
 export const getRepositoryFailureAnalysisSettings = (organizationId: string, repositoryId: string) =>

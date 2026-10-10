@@ -23,6 +23,10 @@ Verification recorded so far:
 - The updated real HTTP smoke rejected a delayed response under the child's default one-second idle timer, accepted the 35-second response with the socket-idle timer disabled (35,004 ms), and produced `llm_timeout` when the actual abort timer was accelerated from 600 seconds to one second. Provider suite: 20 passed, 0 failed; all workspace typechecks passed.
 - The user selected **Use smaller local model**, explicitly accepting that the shared saved profile affects global CI and PR model selection. Actual AI settings UI editing and an authorized provider GET confirmed profile `84c009e2-8c43-4ee0-98f8-c7491581413d` now uses `google/gemma-4-e2b`. Base URL, credentials, opt-in/global enablement, prompts, token caps, and generation/interruption limits are unchanged. The original model was not unloaded and unrelated requests were not cancelled.
 - A separate shared-model request was mapped to `Snazzie/MARS` / `Windows runner smoke` run `38015231153`, not the disposable fixture; it settled before new fixture work resumed. Its interrupted database state was not treated as proof the server had stopped decoding.
+- Follow-up request: add an independent **Enable all PR reviews** control. Global PR settings default off, have their own provider/activation timestamp, override local selection for available approved repositories, and preserve local opt-ins for fallback. Generated `0013_aspiring_the_hood` adds only the global PR settings table; `db:check` and development/isolated migrations passed.
+- Global-control proof: actual UI provider selection remained blocked from enabling until dedicated source consent; acknowledged activation persisted; a repository with local opt-in off displayed the effective global provider without changing its checkbox; native visual proof captured. The control was restored to off/provider unset afterward, and current CI global settings remained unchanged. The user requested the control, not permanent activation.
+- Latest global-feature gate: 283 passed, 0 failed, 991 assertions across 11 focused suites; all workspace typechecks passed. PostgreSQL regressions cover global-only eligibility, provider precedence/fallback, activation boundary, generation-time disable/provider change, admin/provider validation, and preservation of CI/local settings. A Happy DOM selected-value getter disagreed with the correctly selected SSR option; that incidental renderer assertion was removed, with provider selection verified in actual Chromium rather than re-pinned.
+- An intervening operator changed the shared saved model to `google/gemma-4-12b-qat` and current CI activation timestamp. The actual UI and authorized provider GET confirmed the current Google model; those changes were preserved, not overwritten by the earlier E2B choice.
 
 ## Goal
 
@@ -41,6 +45,7 @@ MARS automatically reviews opted-in repositories' pull requests and publishes ad
 ### Settings
 
 - Add a separate per-repository PR review toggle and provider selection to AI settings; disabled by default.
+- A separately configured global **Enable all PR reviews** control may override those local opt-ins/provider choices for available approved repositories, including newly discovered repositories. It defaults off, is independent of CI Enable all, and preserves local settings for fallback when disabled.
 - Only global administrators can change settings, matching existing AI configuration authorization.
 - Enabling CI failure analysis does not enable PR review, and vice versa.
 - Reuse saved provider profiles, encrypted credentials, model selection, token usage, and configured token prices.

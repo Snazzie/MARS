@@ -18,7 +18,7 @@ async function fixture(work: (db: DatabaseClient) => Promise<void>) {
   const db = createDb(Bun.env.MARS_E2E_DATABASE_URL!);
   try {
     await db.transaction(async tx => {
-      for (const table of ["dashboard_installations", "dashboard_repositories", "llm_providers", "repository_pr_review_settings", "pr_reviews", "pr_review_commands", "pipeline_failure_analyses"]) await tx.$client.unsafe(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING DEFAULTS INCLUDING INDEXES INCLUDING CONSTRAINTS) ON COMMIT DROP`);
+      for (const table of ["dashboard_installations", "dashboard_repositories", "llm_providers", "global_pr_review_settings", "global_failure_analysis_settings", "repository_pr_review_settings", "pr_reviews", "pr_review_commands", "pipeline_failure_analyses", "webhook_deliveries"]) await tx.$client.unsafe(`CREATE TEMP TABLE ${table} (LIKE public.${table} INCLUDING DEFAULTS INCLUDING INDEXES INCLUDING CONSTRAINTS) ON COMMIT DROP`);
       await tx.insert(schema.dashboardInstallations).values({ id: installationId, organizationId, githubInstallationId: 99, state: "approved" });
       await tx.insert(schema.dashboardRepositories).values({ id: repositoryId, organizationId, installationId, githubRepositoryId: 88, name: "repo", fullName: "acme/repo", available: true });
       await tx.insert(schema.llmProviders).values({ id: providerId, name: "review", kind: "openai-compatible", baseUrl: "http://localhost:1234/v1", model: "test", inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 2 });
@@ -301,4 +301,95 @@ integration("an eight-minute PR generation survives another processor sweep with
   expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ analysisState: "running", errorCode: null, publicationState: "pending" });
   expect(observed.modelCalls).toBe(0);
   expect(observed.posts).toEqual([]);
+}));
+
+integration("global PR enablement reviews an approved repository without a local opt-in", () => fixture(async db => {
+  const { deps, observed, event } = scenario(db);
+  await db.delete(schema.repositoryPrReviewSettings);
+  await db.insert(schema.globalPrReviewSettings).values({ enableAll: true, providerId, enabledSince: "2026-10-09T00:00:00Z" });
+  await handlePrReviewWebhook(deps, "issue_comment", event, "global");
+  await processPrReviews(deps);
+  expect(observed.modelCalls).toBe(1);
+  expect(observed.posts[0]).toMatchObject({ event: "COMMENT", commit_id: head });
+  expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ providerId, analysisState: "completed", publicationState: "published" });
+  expect(await db.select().from(schema.repositoryPrReviewSettings)).toEqual([]);
+}));
+
+integration("global PR provider overrides local selection and disabling it restores local eligibility", () => fixture(async db => {
+  const { deps, event } = scenario(db);
+  const localProvider = "44000000-0000-4000-8000-000000000002";
+  await db.insert(schema.llmProviders).values({ id: localProvider, name: "local", kind: "openai-compatible", baseUrl: "http://localhost:1234/v1", model: "local-model" });
+  await db.update(schema.repositoryPrReviewSettings).set({ providerId: localProvider });
+  await db.insert(schema.globalPrReviewSettings).values({ enableAll: true, providerId, enabledSince: "2026-10-09T00:00:00Z" });
+  await handlePrReviewWebhook(deps, "issue_comment", event, "global");
+  expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ providerId, providerSnapshot: { model: "test" } });
+  await db.update(schema.globalPrReviewSettings).set({ enableAll: false, enabledSince: null });
+  await processPrReviews(deps);
+  expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ analysisState: "skipped", publicationState: "pending" });
+  const { deps: nextDeps, event: nextEvent, observed: nextObserved } = scenario(db);
+  nextObserved.head = "d".repeat(40);
+  await handlePrReviewWebhook(nextDeps, "issue_comment", { ...nextEvent, comment: { ...nextEvent.comment, id: 51 } }, "local");
+  const next = (await db.select().from(schema.prReviews)).find(row => row.headSha === nextObserved.head);
+  expect(next).toMatchObject({ providerId: localProvider, providerSnapshot: { model: "local-model" }, analysisState: "pending" });
+  expect((await db.select().from(schema.repositoryPrReviewSettings))[0]).toMatchObject({ enabled: true, providerId: localProvider });
+}));
+
+integration.each(["disable", "provider"])("global PR %s during generation prevents publication", mode => fixture(async db => {
+  const { deps, observed, event } = scenario(db);
+  await db.delete(schema.repositoryPrReviewSettings);
+  const alternate = "44000000-0000-4000-8000-000000000002";
+  await db.insert(schema.llmProviders).values({ id: alternate, name: "alternate", kind: "openai-compatible", baseUrl: "http://localhost:1234/v1", model: "alternate" });
+  await db.insert(schema.globalPrReviewSettings).values({ enableAll: true, providerId, enabledSince: "2026-10-09T00:00:00Z" });
+  await handlePrReviewWebhook(deps, "issue_comment", event, "global");
+  const generate = deps.generate!;
+  deps.generate = async (...args) => {
+    const result = await generate(...args);
+    await db.update(schema.globalPrReviewSettings).set(mode === "disable" ? { enableAll: false, enabledSince: null, updatedAt: sql`clock_timestamp()` } : { providerId: alternate, updatedAt: sql`clock_timestamp()` });
+    return result;
+  };
+  await processPrReviews(deps);
+  expect(observed.modelCalls).toBe(1);
+  expect(observed.posts).toEqual([]);
+  expect((await db.select().from(schema.prReviews))[0].analysisState).toBe("skipped");
+}));
+
+integration("global PR enablement rejects earlier deliveries and accepts the activation boundary", () => fixture(async db => {
+  const { deps, observed, event } = scenario(db);
+  await db.delete(schema.repositoryPrReviewSettings);
+  await db.insert(schema.globalPrReviewSettings).values({ enableAll: true, providerId, enabledSince: "2026-10-09T00:00:00Z" });
+  await db.insert(schema.webhookDeliveries).values([
+    { deliveryId: "before-global", installationId: 99, payload: {}, receivedAt: "2026-10-08T23:59:59Z" },
+    { deliveryId: "at-global", installationId: 99, payload: {}, receivedAt: "2026-10-09T00:00:00Z" },
+  ]);
+  await handlePrReviewWebhook(deps, "issue_comment", event, "before-global");
+  await processPrReviews(deps);
+  expect(observed.modelCalls).toBe(0);
+  expect(observed.posts).toEqual([]);
+  await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 51 } }, "at-global");
+  await processPrReviews(deps);
+  expect((await db.select().from(schema.prReviews))[0]).toMatchObject({ analysisState: "completed", publicationState: "published" });
+}));
+
+integration("global PR settings require admin rights and preserve CI and repository preferences", () => fixture(async db => {
+  const endpoint = (admin: boolean) => createControlPlaneApp(fakeHttpDeps({ db, currentUser: async () => ({ id: "operator", githubUserId: 1, login: "operator", isGlobalAdmin: admin }) }));
+  const path = "/api/admin/llm/pr-review";
+  const save = (admin: boolean, enableAll: boolean, selected: string | null) => endpoint(admin).request(path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enableAll, providerId: selected }) });
+  await db.insert(schema.globalFailureAnalysisSettings).values({ enableAll: true, providerId, enabledSince: "2026-10-09T00:00:00Z" });
+  const ci = (await db.select().from(schema.globalFailureAnalysisSettings))[0];
+  const local = (await db.select().from(schema.repositoryPrReviewSettings))[0];
+  expect((await endpoint(false).request(path)).status).toBe(403);
+  expect((await save(false, true, providerId)).status).toBe(403);
+  expect((await save(true, true, null)).status).toBe(400);
+  expect((await save(true, true, "44000000-0000-4000-8000-000000000099")).status).toBe(400);
+  expect(await db.select().from(schema.globalPrReviewSettings)).toEqual([]);
+  const enabled = await save(true, true, providerId);
+  expect(enabled.status).toBe(200);
+  const first = await enabled.json() as { enableAll: boolean; providerId: string; enabledSince: string };
+  expect(first).toMatchObject({ enableAll: true, providerId });
+  const again = await save(true, true, providerId);
+  expect(await again.json()).toMatchObject({ enabledSince: first.enabledSince });
+  const disabled = await save(true, false, providerId);
+  expect(await disabled.json()).toMatchObject({ enableAll: false, providerId, enabledSince: null });
+  expect((await db.select().from(schema.repositoryPrReviewSettings))[0]).toEqual(local);
+  expect((await db.select().from(schema.globalFailureAnalysisSettings))[0]).toEqual(ci);
 }));

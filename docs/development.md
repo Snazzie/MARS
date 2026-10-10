@@ -133,10 +133,15 @@ pull requests by the installed MARS GitHub App. Only newly completed failures
 after opt-in are analyzed; no historical backfill or automatic retry is performed.
 
 
-Pull-request review is an independent repository opt-in in **Settings**; pipeline
-failure-analysis enablement never enables it. Administrators select a saved provider
-profile separately for each repository. Enabling is prospective and does not backfill
-open PRs. Eligible opened, reopened, ready-for-review, and synchronized revisions
+Pull-request review has independent repository opt-in and **Enable all PR reviews**
+controls in **Settings**; CI failure-analysis enablement never enables it.
+Both PR controls default off. Administrators select a saved PR provider separately.
+The global control requires a selected provider and source-sharing acknowledgement,
+overrides local PR selections for all available, approved repositories (including
+newly discovered ones), and preserves their individual settings. Turn it off to use
+local opt-ins again; turn it off before changing the global PR provider.
+Enabling is prospective and does not backfill open PRs.
+Eligible opened, reopened, ready-for-review, and synchronized revisions
 may be reviewed; drafts, closed PRs, and description-only changes are not reviewed.
 An authorized repository writer can also request the current revision by posting a
 standalone `/review` PR-conversation comment. Publication is advisory: MARS uses GitHub
@@ -187,10 +192,11 @@ Drain running analyses before rolling back to shorter generation/interruption
 limits. Failed attempts and published history remain durable; a rollback must not
 force another request for an already attempted PR revision.
 
-Schema rollout is additive (`0011_blue_centennial`): run `packages/db`'s
-`db:migrate` before starting the control plane. Rolling back the application does
-not require deleting PR-review tables or settings; keep the migration journal and
-existing CI-analysis data intact.
+Schema rollout is additive (`0011_blue_centennial`, `0013_aspiring_the_hood`):
+run `packages/db`'s `db:migrate` before starting the control plane. Disable the
+global PR control before rolling back to an application without that feature.
+Keep its table/settings and the migration journal; rollback does not require
+deleting PR-review records, repository opt-ins, or existing CI-analysis data.
 
 Run `bun run dev:worker` on Windows x64/ARM64, Apple Silicon macOS, or Linux
 x64/ARM64. It chooses the existing worker runtime for the host; the worker

@@ -269,6 +269,19 @@ export const GlobalFailureAnalysisSaveRequest = strict({
 });
 export type GlobalFailureAnalysisSaveRequest = z.infer<typeof GlobalFailureAnalysisSaveRequest>;
 
+export const GlobalPrReviewSettings = dto(strict({
+  enableAll: z.boolean(),
+  providerId: id.nullable(),
+  enabledSince: timestamp.nullable(),
+  updatedAt: timestamp,
+}));
+export type GlobalPrReviewSettings = z.infer<typeof GlobalPrReviewSettings>;
+export const GlobalPrReviewSaveRequest = strict({
+  enableAll: z.boolean(),
+  providerId: id.nullable(),
+});
+export type GlobalPrReviewSaveRequest = z.infer<typeof GlobalPrReviewSaveRequest>;
+
 export const RepositoryFailureAnalysisSettings = dto(strict({
   organizationId: id,
   repositoryId: id,
