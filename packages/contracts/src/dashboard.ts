@@ -150,6 +150,7 @@ export const PipelineAnalysisMetrics = dto(strict({
   queuedAt: timestamp, startedAt: timestamp.nullable(), finishedAt: timestamp.nullable(),
   providerCalledAt: timestamp.nullable(),
   queueWaitMs: nonnegativeSafe.nullable(), durationMs: nonnegativeSafe.nullable(),
+  tokensPerSecond: z.number().nonnegative().finite().nullable().default(null),
   usage: strict({ input: nonnegativeSafe.nullable(), output: nonnegativeSafe.nullable(), total: nonnegativeSafe.nullable() }),
   estimatedCostUsd: z.number().nonnegative().finite().nullable(),
 }));
@@ -332,6 +333,7 @@ export const PrReviewSummary = strict({
   analysisState: z.enum(["pending", "running", "completed", "failed", "skipped", "superseded"]),
   publicationState: z.enum(["pending", "publishing", "published", "failed", "unknown"]),
   result: PrReviewResult.nullable(), source: z.record(z.unknown()), inputTokens: tokenCount.nullable(), outputTokens: tokenCount.nullable(),
+  tokensPerSecond: z.number().nonnegative().finite().nullable().default(null),
   estimatedCostUsd: tokenPrice.nullable(), errorCode: z.string().nullable(), reviewId: positiveSafe.nullable(), reviewUrl: z.string().url().nullable(),
   providerCalledAt: timestamp.nullable(),
   createdAt: timestamp, startedAt: timestamp.nullable(), completedAt: timestamp.nullable(), publicationStartedAt: timestamp.nullable(),

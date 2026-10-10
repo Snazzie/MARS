@@ -102,8 +102,17 @@ Dashboard recovery and navigation:
   completion, including log retrieval/model work but excluding PR publishing; it advances
   while running and freezes on completion or failure. Work skipped before claim shows
   Not started and its wait, never an invented processing time. Historical missing or
-  reversed timing evidence remains unavailable. Existing analysis timestamps/usage are
-  reused; no schema migration or paid-call replay is required.
+  reversed timing evidence remains unavailable. Existing timestamps are reused for
+  queue wait and processing time; no paid-call replay is required.
+  Pipeline analyses and PR reviews also persist `tokensPerSecond` and expose it in
+  their run API metrics. This is reported **output tokens / provider request seconds**,
+  measured with a monotonic clock from request dispatch through the complete response
+  body. It includes provider/network latency and prompt processing, but excludes queue
+  wait, evidence collection, LM Studio model loading, and publication; it is not
+  decode-only throughput. Usage and throughput survive invalid generated content.
+  Historical runs, missing/invalid usage, and requests without a usable response
+  retain `null` throughput. The additive migration preserves existing rows; roll back
+  application code without dropping the columns to retain collected metrics.
 - Overview starts with time-window controls and the dispatcher card, without the
   introductory title block or Live workload panel. Six summary metrics use one row
   on wide screens, three columns on tablets, and two on phones.

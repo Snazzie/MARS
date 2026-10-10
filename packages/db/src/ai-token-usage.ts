@@ -39,6 +39,7 @@ export interface PipelineAnalysisMetricsRow extends PipelineFailureAnalysisUsage
   queuedAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  tokensPerSecond?: number | null;
 }
 
 export function getPipelineAnalysisMetrics(row: PipelineAnalysisMetricsRow, now = Date.now()): PipelineAnalysisMetrics {
@@ -54,6 +55,7 @@ export function getPipelineAnalysisMetrics(row: PipelineAnalysisMetricsRow, now 
     providerCalledAt: row.calledAt instanceof Date ? row.calledAt.toISOString() : row.calledAt,
     queueWaitMs: interval(row.queuedAt, row.startedAt ?? row.finishedAt ?? (row.state === "pending" ? now : null)),
     durationMs: interval(row.startedAt, row.finishedAt ?? (row.state === "running" ? now : null)),
+    tokensPerSecond: row.tokensPerSecond ?? null,
     usage: { input, output, total },
     estimatedCostUsd: row.calledAt === null ? null : estimateAiRequestCost(row),
   };

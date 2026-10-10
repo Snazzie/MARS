@@ -36,7 +36,7 @@ const queries = defineQueries(db => {
     load: db.select().from(a).where(eq(a.id, placeholder("id"))).limit(1).prepare("pr_review_load"),
     source: db.update(a).set({ source: placeholder("source") }).where(and(eq(a.id, placeholder("id")), eq(a.analysisState, "running"))).prepare("pr_review_source"),
     called: db.update(a).set({ providerCalledAt: sql`now()` }).where(and(eq(a.id, placeholder("id")), eq(a.analysisState, "running"))).prepare("pr_review_called"),
-    usage: db.update(a).set({ inputTokens: sql`${placeholder("inputTokens")}`, outputTokens: sql`${placeholder("outputTokens")}`, estimatedCostUsd: sql`${placeholder("estimatedCostUsd")}` }).where(eq(a.id, placeholder("id"))).prepare("pr_review_usage"),
+    usage: db.update(a).set({ inputTokens: sql`${placeholder("inputTokens")}`, outputTokens: sql`${placeholder("outputTokens")}`, tokensPerSecond: sql`${placeholder("tokensPerSecond")}`, estimatedCostUsd: sql`${placeholder("estimatedCostUsd")}` }).where(eq(a.id, placeholder("id"))).prepare("pr_review_usage"),
     complete: db.update(a).set({ analysisState: "completed", result: placeholder("result"), completedAt: sql`now()`, errorCode: null }).where(and(eq(a.id, placeholder("id")), eq(a.analysisState, "running"))).returning().prepare("pr_review_complete"),
     finish: db.update(a).set({ analysisState: sql`${placeholder("state")}`, errorCode: sql`${placeholder("errorCode")}`, completedAt: sql`now()` }).where(and(eq(a.id, placeholder("id")), eq(a.analysisState, "running"))).prepare("pr_review_finish"),
     readyPublication: db.select().from(a).where(and(eq(a.analysisState, "completed"), eq(a.publicationState, "pending"))).orderBy(asc(a.createdAt)).limit(10).prepare("pr_review_ready_publication"),

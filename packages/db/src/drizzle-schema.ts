@@ -1,4 +1,4 @@
-import { pgTable, unique, uuid, bigint, text, boolean, timestamp, foreignKey, check, integer, uniqueIndex, jsonb, index, primaryKey, numeric, customType } from "drizzle-orm/pg-core";
+import { pgTable, unique, uuid, bigint, text, boolean, timestamp, foreignKey, check, integer, uniqueIndex, jsonb, index, primaryKey, numeric, customType, doublePrecision } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({ dataType: () => "bytea" });
@@ -486,6 +486,7 @@ export const prReviews = pgTable("pr_reviews", {
 	source: jsonb().notNull(),
 	inputTokens: bigint("input_tokens", { mode: "number" }),
 	outputTokens: bigint("output_tokens", { mode: "number" }),
+	tokensPerSecond: doublePrecision("tokens_per_second"),
 	estimatedCostUsd: numeric("estimated_cost_usd", { precision: 14, scale: 6, mode: "number" }),
 	errorCode: text("error_code"),
 	reviewId: bigint("review_id", { mode: "number" }),
@@ -532,6 +533,7 @@ export const pipelineFailureAnalyses = pgTable("pipeline_failure_analyses", {
 	result: jsonb(),
 	inputTokens: bigint("input_tokens", { mode: "number" }),
 	outputTokens: bigint("output_tokens", { mode: "number" }),
+	tokensPerSecond: doublePrecision("tokens_per_second"),
 	inputUsdPerMillionTokens: numeric("input_usd_per_million_tokens", { precision: 14, scale: 6, mode: "number" }),
 	outputUsdPerMillionTokens: numeric("output_usd_per_million_tokens", { precision: 14, scale: 6, mode: "number" }),
 	providerCalledAt: timestamp("provider_called_at", { withTimezone: true, mode: 'string' }),

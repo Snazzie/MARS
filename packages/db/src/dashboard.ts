@@ -471,6 +471,7 @@ function analysisMetricsProjection() {
   return {
     queuedAt: a.createdAt, startedAt: a.startedAt, finishedAt: a.finishedAt, providerCalledAt: a.providerCalledAt,
     inputTokens: a.inputTokens, outputTokens: a.outputTokens,
+    tokensPerSecond: a.tokensPerSecond,
     inputUsdPerMillionTokens: a.inputUsdPerMillionTokens, outputUsdPerMillionTokens: a.outputUsdPerMillionTokens,
   };
 }
@@ -480,6 +481,7 @@ function analysisMetrics(row: Record<string, unknown>, now: number) {
     state: String(row.state), queuedAt: normalizeTimestamp(row.queuedAt)!,
     startedAt: normalizeTimestamp(row.startedAt), finishedAt: normalizeTimestamp(row.finishedAt), calledAt: normalizeTimestamp(row.providerCalledAt),
     inputTokens: numeric(row.inputTokens), outputTokens: numeric(row.outputTokens),
+    tokensPerSecond: numeric(row.tokensPerSecond),
     inputUsdPerMillionTokens: numeric(row.inputUsdPerMillionTokens), outputUsdPerMillionTokens: numeric(row.outputUsdPerMillionTokens),
   }, now);
 }

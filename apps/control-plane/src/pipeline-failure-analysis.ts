@@ -5,7 +5,7 @@ import type { SecretBox } from "./auth.ts";
 import { GithubJobsClient } from "./github-jobs.ts";
 import { attributeGithubJobLog } from "./github-job-logs.ts";
 import type { GithubJobSnapshot, GithubRunSnapshot } from "./runs.ts";
-import { sanitizeProviderText, type LlmProviderConfig, type PipelineAnalysisContext, type PipelineAnalysisResult } from "./llm-providers.ts";
+import { sanitizeProviderText, type LlmProviderConfig, type PipelineAnalysisContext, type PipelineAnalysisResult, type PipelineAnalysisUsage } from "./llm-providers.ts";
 
 const MAX_TOTAL_CONTEXT = 64 * 1024;
 const MAX_JOB_CONTEXT = 8 * 1024;
@@ -43,7 +43,7 @@ const queries = defineQueries(db => {
     localJobs: db.select({ id: jobs.id, githubJobId: jobs.githubJobId, runAttempt: jobs.runAttempt, name: jobs.name, logsState: jobs.logsState, logsVersion: jobs.logsVersion, conclusion: jobs.conclusion }).from(jobs).where(and(eq(jobs.organizationId, p("organizationId")), eq(jobs.runId, p("runId")), eq(jobs.runAttempt, p("runAttempt")), eq(jobs.githubJobId, p("jobId")))).limit(1).prepare("pipeline_analysis_local_job"),
     localSteps: db.select({ number: steps.number, name: steps.name, conclusion: steps.conclusion, status: steps.status, content: schema.dashboardStepLogChunks.content, sequence: schema.dashboardStepLogChunks.sequence }).from(steps).innerJoin(schema.dashboardStepLogChunks, and(eq(schema.dashboardStepLogChunks.organizationId, steps.organizationId), eq(schema.dashboardStepLogChunks.runId, steps.runId), eq(schema.dashboardStepLogChunks.jobId, steps.jobId), eq(schema.dashboardStepLogChunks.stepId, steps.id))).where(and(eq(steps.organizationId, p("organizationId")), eq(steps.runId, p("runId")), eq(steps.jobId, p("jobId")))).orderBy(asc(steps.number), asc(schema.dashboardStepLogChunks.sequence)).prepare("pipeline_analysis_local_steps"),
     localJobLogs: db.select({ content: schema.dashboardLogChunks.content, sequence: schema.dashboardLogChunks.sequence }).from(schema.dashboardLogChunks).where(and(eq(schema.dashboardLogChunks.organizationId, p("organizationId")), eq(schema.dashboardLogChunks.runId, p("runId")), eq(schema.dashboardLogChunks.jobId, p("jobId")))).orderBy(asc(schema.dashboardLogChunks.sequence)).prepare("pipeline_analysis_local_job_logs"),
-    recordUsage: db.update(a).set({ inputTokens: sql`${p("inputTokens")}`, outputTokens: sql`${p("outputTokens")}`, updatedAt: sql`now()` }).where(eq(a.id, p("id"))).prepare("pipeline_analysis_record_usage"),
+    recordUsage: db.update(a).set({ inputTokens: sql`${p("inputTokens")}`, outputTokens: sql`${p("outputTokens")}`, tokensPerSecond: sql`${p("tokensPerSecond")}`, updatedAt: sql`now()` }).where(eq(a.id, p("id"))).prepare("pipeline_analysis_record_usage"),
     markCall: db.update(a).set({ providerCalledAt: sql`now()`, updatedAt: sql`now()` }).where(eq(a.id, p("id"))).prepare("pipeline_analysis_mark_call"),
     complete: db.update(a).set({ state: "completed", result: p("result"), errorCode: null, finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.id, p("id")), eq(a.state, "running"))).prepare("pipeline_analysis_complete"),
     fail: db.update(a).set({ state: "failed", errorCode: sql`${p("errorCode")}`, finishedAt: sql`now()`, updatedAt: sql`now()` }).where(and(eq(a.id, p("id")), eq(a.state, "running"))).prepare("pipeline_analysis_fail"),
@@ -61,7 +61,7 @@ const queries = defineQueries(db => {
 export interface PipelineFailureAnalysisDeps {
   db: DatabaseClient;
   secretBox: SecretBox;
-  generatePipelineAnalysis(input: { provider: LlmProviderConfig; context: PipelineAnalysisContext; secretBox: SecretBox; onRequest?: () => void | Promise<void>; onUsage?: (usage: { inputTokens: number; outputTokens: number } | null) => void | Promise<void> }): Promise<PipelineAnalysisResult>;
+  generatePipelineAnalysis(input: { provider: LlmProviderConfig; context: PipelineAnalysisContext; secretBox: SecretBox; onRequest?: () => void | Promise<void>; onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void> }): Promise<PipelineAnalysisResult>;
   installationToken(installationId: number): Promise<string>;
   githubFetchForInstallation(installationId: number): typeof fetch;
   installationBlocked?(installationId: number): boolean;

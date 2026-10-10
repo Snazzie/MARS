@@ -180,6 +180,7 @@ integration("failed generated analysis retains reported usage and queued pricing
   await processPipelineFailureAnalyses(deps);
   const [analysis] = await db.select().from(schema.pipelineFailureAnalyses);
   expect(analysis).toMatchObject({ state: "failed", errorCode: "llm_invalid_response", inputTokens: 1000, outputTokens: 200, inputUsdPerMillionTokens: 2, outputUsdPerMillionTokens: 10 });
+  expect(analysis!.tokensPerSecond).toBeGreaterThan(0);
   expect(await getAiTokenUsage(db)).toMatchObject({ inputTokens: 1000, outputTokens: 200, reportedRequests: 1, unreportedRequests: 0, estimatedCostUsd: 0.004 });
 }));
 
@@ -234,6 +235,13 @@ integration("blanket toggle persists independently and disabling restores indivi
   expect(await db.select().from(schema.pipelineFailureAnalyses)).toEqual([]);
 }));
 
+integration("blanket enable does not analyze failures completed before it was enabled", () => fixture(async db => {
+  await db.delete(schema.repositoryFailureAnalysisSettings);
+  await db.insert(schema.globalFailureAnalysisSettings).values({ enableAll: true, providerId: provider, enabledSince: "2026-10-08T00:00:00Z" });
+  await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
+  expect(await db.select().from(schema.pipelineFailureAnalyses)).toEqual([]);
+}));
+
 integration.each([8, 16])("%s-minute CI generation survives the request window but expires after its grace period", minutes => fixture(async db => {
   await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
   await enqueuePipelineFailureAnalysis({ db, organizationId: org, repositoryId: repo, run, jobs: [failedJob()] });
@@ -244,11 +252,4 @@ integration.each([8, 16])("%s-minute CI generation survives the request window b
   expect(analysis).toMatchObject({ state: minutes === 8 ? "running" : "failed", errorCode: minutes === 8 ? null : "analysis_interrupted" });
   expect(calls).toEqual([]);
   expect(await db.select().from(schema.pipelineAnalysisComments)).toEqual([]);
-}));
-
-integration("blanket enable does not analyze failures completed before it was enabled", () => fixture(async db => {
-  await db.delete(schema.repositoryFailureAnalysisSettings);
-  await db.insert(schema.globalFailureAnalysisSettings).values({ enableAll: true, providerId: provider, enabledSince: "2026-10-08T00:00:00Z" });
-  await applyGithubJobSnapshot({ installationId: 1, repository: { id: 8, name: "repo", fullName: "acme/repo" }, run, job: failedJob(), authoritative: true });
-  expect(await db.select().from(schema.pipelineFailureAnalyses)).toEqual([]);
 }));

@@ -1,5 +1,5 @@
 import { SecretBox } from "./auth.ts";
-import { expect, test } from "bun:test";
+import { expect, test, spyOn } from "bun:test";
 import { LlmProvidersService, generatePipelineAnalysis, generatePrReview, sanitizeProviderText, validateProviderApiRoot, type LlmProviderConfig } from "./llm-providers.ts";
 import type { LLMLoadModelConfig } from "@lmstudio/sdk";
 
@@ -25,13 +25,13 @@ test("captures OpenAI-compatible and Anthropic reported token usage", async () =
     choices: [{ message: { content: JSON.stringify(valid) } }],
     usage: { prompt_tokens: 17, completion_tokens: 8 },
   }));
-  expect(usage).toEqual([{ inputTokens: 17, outputTokens: 8 }]);
+  expect(usage).toMatchObject([{ inputTokens: 17, outputTokens: 8 }]);
 
   await generatePipelineAnalysis({ provider: { ...provider, kind: "anthropic", encryptedApiKey: "api-key" }, context, onUsage: value => { usage.push(value); } }, async () => Response.json({
     content: [{ type: "text", text: JSON.stringify(valid) }],
     usage: { input_tokens: 23, output_tokens: 9, cache_read_input_tokens: 4 },
   }));
-  expect(usage[1]).toEqual({ inputTokens: 27, outputTokens: 9 });
+  expect(usage[1]).toMatchObject({ inputTokens: 27, outputTokens: 9 });
 });
 
 test("captures reported usage before rejecting invalid generated JSON and ignores invalid counts", async () => {
@@ -41,13 +41,57 @@ test("captures reported usage before rejecting invalid generated JSON and ignore
     choices: [{ message: { content: "not JSON" } }],
     usage: { prompt_tokens: 12, completion_tokens: 3 },
   }))).rejects.toThrow("llm_invalid_response");
-  expect(usage).toEqual([{ inputTokens: 12, outputTokens: 3 }]);
+  expect(usage).toMatchObject([{ inputTokens: 12, outputTokens: 3 }]);
 
   await generatePipelineAnalysis({ provider, context, onUsage: value => { usage.push(value); } }, async () => Response.json({
     choices: [{ message: { content: JSON.stringify(valid) } }],
     usage: { prompt_tokens: -1, completion_tokens: 3 },
   }));
   expect(usage[1]).toBeNull();
+});
+
+test("throughput uses output tokens and includes response body time but excludes request bookkeeping", async () => {
+  let clock = 0;
+  const timer = spyOn(performance, "now").mockImplementation(() => clock);
+  const usage: unknown[] = [];
+  try {
+    await generatePipelineAnalysis({
+      provider: { name: "local", kind: "openai-compatible", baseUrl: "http://localhost/v1", model: "model" },
+      context,
+      onRequest: () => { clock = 5000; },
+      onUsage: value => { usage.push(value); },
+    }, async () => {
+      clock = 5500;
+      return new Response(new ReadableStream({
+        pull(controller) {
+          clock = 7000;
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({
+            choices: [{ message: { content: JSON.stringify(valid) } }],
+            usage: { prompt_tokens: 1000, completion_tokens: 40 },
+          })));
+          controller.close();
+        },
+      }));
+    });
+    expect(usage).toEqual([{ inputTokens: 1000, outputTokens: 40, tokensPerSecond: 20 }]);
+  } finally { timer.mockRestore(); }
+});
+
+test("PR review retains throughput when generated findings are invalid", async () => {
+  let clock = 0;
+  const timer = spyOn(performance, "now").mockImplementation(() => clock);
+  const usage: unknown[] = [];
+  try {
+    await expect(generatePrReview({
+      provider: { name: "cloud", kind: "anthropic", baseUrl: "http://localhost/v1", model: "model", encryptedApiKey: "key" },
+      context: {},
+      onUsage: value => { usage.push(value); },
+    }, async () => {
+      clock = 2000;
+      return Response.json({ content: [{ type: "text", text: "invalid JSON" }], usage: { input_tokens: 100, output_tokens: 30 } });
+    })).rejects.toThrow("llm_invalid_response");
+    expect(usage).toEqual([{ inputTokens: 100, outputTokens: 30, tokensPerSecond: 15 }]);
+  } finally { timer.mockRestore(); }
 });
 
 test("encrypts saved API keys and never returns key material in provider summaries", async () => {
@@ -201,7 +245,7 @@ test("generates structured PR findings through the shared provider transport and
     return Response.json({ choices: [{ message: { content: JSON.stringify({ findings: [finding] }) } }], usage: { prompt_tokens: 14, completion_tokens: 7 } });
   });
   expect(result.findings).toEqual([finding]);
-  expect(usage).toEqual([{ inputTokens: 14, outputTokens: 7 }]);
+  expect(usage).toMatchObject([{ inputTokens: 14, outputTokens: 7 }]);
 });
 test("preserves PR eligibility aborts instead of reporting them as provider failures", async () => {
   const provider = { name: "cloud", kind: "openai-compatible" as const, baseUrl: "http://localhost:11434/v1", model: "model" };

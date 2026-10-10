@@ -39,7 +39,7 @@ export interface LlmProviderConfig {
   outputUsdPerMillionTokens?: number | null;
   encryptedApiKey?: string | null;
 }
-export interface PipelineAnalysisUsage { inputTokens: number; outputTokens: number }
+export interface PipelineAnalysisUsage { inputTokens: number; outputTokens: number; tokensPerSecond: number | null }
 export interface PipelineAnalysisContext {
   run: Record<string, unknown>;
   failedJobs: Array<{ jobId: number; steps?: Array<{ stepNumber: number; name?: string; conclusion?: string; excerpt?: string }>; excerpt?: string; [key: string]: unknown }>;
@@ -110,7 +110,7 @@ async function readCappedResponse(response: Response): Promise<string> {
   return new TextDecoder().decode(bytes);
 }
 
-function providerUsage(kind: LlmProviderKind, payload: unknown): PipelineAnalysisUsage | null {
+function providerUsage(kind: LlmProviderKind, payload: unknown, durationMs: number): PipelineAnalysisUsage | null {
   if (!payload || typeof payload !== "object") return null;
   const usage = (payload as Record<string, unknown>).usage;
   if (!usage || typeof usage !== "object") return null;
@@ -123,7 +123,7 @@ function providerUsage(kind: LlmProviderKind, payload: unknown): PipelineAnalysi
   if (!count(baseInput) || !count(cachedRead) || !count(cachedWrite) || !count(output)) return null;
   const input = baseInput + cachedRead + cachedWrite;
   return Number.isSafeInteger(input) && Number.isSafeInteger(output) && (input as number) >= 0 && (output as number) >= 0
-    ? { inputTokens: input as number, outputTokens: output as number }
+    ? { inputTokens: input as number, outputTokens: output as number, tokensPerSecond: durationMs > 0 && Number.isFinite(durationMs) ? output * 1000 / durationMs : null }
     : null;
 }
 
@@ -240,12 +240,14 @@ async function requestProvider(input: {
   try {
     await input.onRequest?.();
     // The whole-request abort owns the deadline, including response-body reads.
+    const startedAt = performance.now();
     const response = await fetcher(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal: controller.signal, timeout: false, redirect: "error" });
     if (!response.ok) throw new Error(errorCode(response.status));
     const raw = await readCappedResponse(response);
+    const durationMs = performance.now() - startedAt;
     let payload: unknown;
     try { payload = JSON.parse(raw); } catch { throw new Error("llm_invalid_response"); }
-    await input.onUsage?.(providerUsage(provider.kind, payload));
+    await input.onUsage?.(providerUsage(provider.kind, payload, durationMs));
     return responseContent(provider.kind, payload);
   } catch (error) {
     if (error instanceof Error && /^llm_(?:timeout|auth_failed|rate_limited|unavailable|invalid_response|model_not_found|model_load_failed)$/.test(error.message)) throw error;
