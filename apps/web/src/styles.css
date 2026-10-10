@@ -1516,17 +1516,27 @@ a:active {
 .ai-repository-table thead th{color:var(--ui-text-muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.05em}
 .ai-repository-table tbody th{font-weight:500;overflow-wrap:anywhere}
 .ai-repository-table tbody tr:last-child th,.ai-repository-table tbody tr:last-child td{border-bottom:0}
-.ai-token-usage-summary{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 24px;font-size:.85rem}
-.ai-token-usage-models{overflow-x:auto}
-.ai-token-usage-models .ai-repository-table th,.ai-token-usage-models .ai-repository-table td{padding:6px 10px;font-size:.8rem}
-.ai-token-usage-models .ai-repository-table td{white-space:nowrap;text-align:right}
-.ai-token-usage-chart{min-height:160px}
-.overview-ai-usage{margin:12px 0;padding:12px 16px;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius);gap:8px}
-.overview-ai-usage .panel-heading{margin-bottom:0}
-.overview-ai-usage .eyebrow{margin-bottom:4px}
-.overview-ai-usage .form-help{margin-top:2px;font-size:.75rem}
-.overview-ai-usage .chart-note{margin:4px 0;font-size:.75rem}
-.overview-ai-usage h2{font-size:1rem}
+.ai-observe-widgets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.ai-observe-widget{padding:12px 16px;background:var(--ui-surface);border:1px solid var(--ui-border);border-radius:var(--radius);gap:8px}
+.ai-observe-widget .panel-heading{margin-bottom:0}
+.ai-observe-widget .eyebrow{margin-bottom:4px}
+.ai-observe-widget .form-help{margin-top:2px;font-size:.75rem}
+.ai-observe-widget .chart-note{margin:4px 0;font-size:.75rem}
+.ai-observe-widget h2{font-size:1rem}
+.ai-token-usage-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.ai-token-usage-toolbar .detail-tab-list{padding:0;border:0}
+.ai-token-usage-toolbar .detail-tab-list button{padding:4px 12px;font-size:.8rem}
+.ai-token-usage-summary{display:flex;align-items:center;gap:12px;margin:8px 0;font-size:.8rem}
+.ai-token-usage-summary>strong{font-size:1.4rem;line-height:1.2}
+.ai-token-usage-summary small{display:block;color:var(--ui-text-muted);font-size:.75rem}
+.ai-token-usage-chart{min-height:120px}
+.overview-ai-usage{margin:12px 0}
+.ai-performance-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-content:center;height:100%}
+.ai-performance-metric h3{font-size:.85rem}
+.ai-performance-metric dl{display:flex;flex-wrap:wrap;gap:12px 24px;margin:16px 0}
+.ai-performance-metric dt{font-size:.75rem;color:var(--ui-text-muted)}
+.ai-performance-metric dd{font-size:1.4rem;margin:4px 0 0;line-height:1.2}
+@media(max-width:900px){.ai-observe-widgets{grid-template-columns:1fr}}
 .ai-provider-select{max-width:420px}
 .ai-consent{color:var(--ui-text-muted);max-width:760px}
 .ai-empty{border:1px dashed var(--ui-border);border-radius:var(--radius);padding:24px;color:var(--ui-text-muted);line-height:1.6}

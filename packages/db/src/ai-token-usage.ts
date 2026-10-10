@@ -59,7 +59,7 @@ export function getPipelineAnalysisMetrics(row: PipelineAnalysisMetricsRow, now 
   };
 }
 
-function aggregateUsageTotals(rows: readonly PipelineFailureAnalysisUsageRow[], now: Date): Omit<AiTokenUsage, "models"> {
+function aggregateUsageTotals(rows: readonly PipelineFailureAnalysisUsageRow[], now: Date): Omit<AiTokenUsage, "models" | "performance"> {
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const firstDay = new Date(today);
   firstDay.setUTCDate(firstDay.getUTCDate() - 29);
@@ -112,6 +112,22 @@ function aggregateUsageTotals(rows: readonly PipelineFailureAnalysisUsageRow[], 
   };
 }
 
+export function aggregateAiRunPerformance(rows: readonly { queuedAt: string; startedAt: string | null; finishedAt: string | null }[]): AiTokenUsage["performance"] {
+  const starts: number[] = [], completions: number[] = [];
+  for (const row of rows) {
+    const queued = Date.parse(row.queuedAt);
+    const started = row.startedAt === null ? NaN : Date.parse(row.startedAt);
+    const finished = row.finishedAt === null ? NaN : Date.parse(row.finishedAt);
+    if (Number.isSafeInteger(started - queued) && started >= queued) starts.push(started - queued);
+    if (Number.isSafeInteger(finished - started) && finished >= started && started >= queued) completions.push(finished - started);
+  }
+  const percentiles = (values: number[]) => {
+    values.sort((a, b) => a - b);
+    return { sampleCount: values.length, p50Ms: values.length ? values[Math.ceil(values.length * 0.5) - 1]! : null, p95Ms: values.length ? values[Math.ceil(values.length * 0.95) - 1]! : null };
+  };
+  return { timeToStart: percentiles(starts), timeToComplete: percentiles(completions) };
+}
+
 export function aggregateAiTokenUsage(rows: readonly PipelineFailureAnalysisUsageRow[], now = new Date()): AiTokenUsage {
   const groups = new Map<string, PipelineFailureAnalysisUsageRow[]>();
   const normalized = rows.map(row => row.providerKind === "lm-studio"
@@ -129,6 +145,7 @@ export function aggregateAiTokenUsage(rows: readonly PipelineFailureAnalysisUsag
   }
   return {
     ...aggregateUsageTotals(normalized, now),
+    performance: aggregateAiRunPerformance([]),
     models: [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([model, calls]) => ({
       model, ...aggregateUsageTotals(calls, now),
     })),

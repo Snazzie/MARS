@@ -6,7 +6,7 @@ import * as schema from "./drizzle-schema.ts";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { getGithubRunnerCostSavings } from "./github-runner-cost.ts";
 import type { AiTokenUsage } from "@mars/contracts";
-import { aggregateAiTokenUsage, getPipelineAnalysisMetrics, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
+import { aggregateAiTokenUsage, aggregateAiRunPerformance, getPipelineAnalysisMetrics, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
 import type { PipelineAnalysisWork } from "@mars/contracts";
 export type DashboardDb = DatabaseClient;
 export type RunTransition = { status: RunSummary["status"]; conclusion: RunSummary["conclusion"]; startedAt?: string | null; completedAt?: string | null };
@@ -24,14 +24,27 @@ const aiTokenUsageQueries = defineQueries(db => ({
     .prepare("dashboard_ai_token_usage"),
 }));
 
+const aiRunPerformanceQueries = defineQueries(db => ({
+  pipeline: db.select({ queuedAt: schema.pipelineFailureAnalyses.createdAt, startedAt: schema.pipelineFailureAnalyses.startedAt, finishedAt: schema.pipelineFailureAnalyses.finishedAt })
+    .from(schema.pipelineFailureAnalyses)
+    .where(sql`${schema.pipelineFailureAnalyses.createdAt} >= (${sql.placeholder("from")}::date::timestamp AT TIME ZONE 'UTC') AND ${schema.pipelineFailureAnalyses.createdAt} < ((${sql.placeholder("to")}::date + 1)::timestamp AT TIME ZONE 'UTC')`)
+    .prepare("dashboard_ai_pipeline_performance"),
+  reviews: db.select({ queuedAt: schema.prReviews.createdAt, startedAt: schema.prReviews.startedAt, finishedAt: schema.prReviews.completedAt })
+    .from(schema.prReviews)
+    .where(sql`${schema.prReviews.createdAt} >= (${sql.placeholder("from")}::date::timestamp AT TIME ZONE 'UTC') AND ${schema.prReviews.createdAt} < ((${sql.placeholder("to")}::date + 1)::timestamp AT TIME ZONE 'UTC')`)
+    .prepare("dashboard_ai_review_performance"),
+}));
+
 export async function getAiTokenUsage(db: DashboardDb, now = new Date()): Promise<AiTokenUsage> {
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const from = new Date(today);
   from.setUTCDate(from.getUTCDate() - 29);
   const queryArgs = { from: from.toISOString().slice(0, 10), to: today.toISOString().slice(0, 10) };
-  const [pipelineRows, prRows] = await Promise.all([
+  const [pipelineRows, prRows, pipelineTiming, reviewTiming] = await Promise.all([
     aiTokenUsageQueries(db).rows.execute(queryArgs),
     prReviewUsageQueries(db).rows.execute(queryArgs),
+    aiRunPerformanceQueries(db).pipeline.execute(queryArgs),
+    aiRunPerformanceQueries(db).reviews.execute(queryArgs),
   ]);
   const prUsageRows: PipelineFailureAnalysisUsageRow[] = (prRows ?? []).map(row => ({
     calledAt: row.calledAt,
@@ -43,7 +56,8 @@ export async function getAiTokenUsage(db: DashboardDb, now = new Date()): Promis
     outputUsdPerMillionTokens: null,
     estimatedCostUsd: row.estimatedCostUsd,
   }));
-  return aggregateAiTokenUsage([...(pipelineRows ?? []) as PipelineFailureAnalysisUsageRow[], ...prUsageRows], now);
+  return { ...aggregateAiTokenUsage([...(pipelineRows ?? []) as PipelineFailureAnalysisUsageRow[], ...prUsageRows], now),
+    performance: aggregateAiRunPerformance([...pipelineTiming, ...reviewTiming]) };
 }
 
 const prReviewUsageQueries = defineQueries(db => ({

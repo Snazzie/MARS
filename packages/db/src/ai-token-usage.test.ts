@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { aggregateAiTokenUsage, getPipelineAnalysisMetrics, type PipelineAnalysisMetricsRow, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
+import { aggregateAiTokenUsage, aggregateAiRunPerformance, getPipelineAnalysisMetrics, type PipelineAnalysisMetricsRow, type PipelineFailureAnalysisUsageRow } from "./ai-token-usage.ts";
 
 const now = new Date("2026-10-07T15:00:00Z");
 const row = (changes: Partial<PipelineFailureAnalysisUsageRow> = {}): PipelineFailureAnalysisUsageRow => ({
@@ -85,4 +85,28 @@ test("skips without a worker claim and incomplete or reversed timestamps do not 
   expect(getPipelineAnalysisMetrics(analysis({ finishedAt: null }))).toMatchObject({ queueWaitMs: 5_000, durationMs: null });
   expect(getPipelineAnalysisMetrics(analysis({ startedAt: "2026-10-07T00:59:59.000Z", finishedAt: "2026-10-07T00:59:58.000Z" }))).toMatchObject({ queueWaitMs: null, durationMs: null });
   expect(getPipelineAnalysisMetrics(analysis({ inputTokens: -1 }))).toMatchObject({ usage: { input: null, total: null }, estimatedCostUsd: null });
+});
+
+test("AI run percentiles use observed phases and exclude missing or reversed timestamps", () => {
+  const queuedAt = "2026-10-07T00:00:00Z";
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    queuedAt, startedAt: new Date(Date.parse(queuedAt) + (index + 1) * 1_000).toISOString(),
+    finishedAt: new Date(Date.parse(queuedAt) + (index + 1) * 3_000).toISOString(),
+  }));
+  rows.reverse();
+  const performance = aggregateAiRunPerformance([
+    ...rows,
+    { queuedAt, startedAt: null, finishedAt: null },
+    { queuedAt, startedAt: "2026-10-06T23:59:59Z", finishedAt: queuedAt },
+    { queuedAt, startedAt: queuedAt, finishedAt: "2026-10-06T23:59:59Z" },
+    { queuedAt, startedAt: "2026-10-07T00:01:00Z", finishedAt: null },
+  ]);
+  expect(performance).toEqual({
+    timeToStart: { sampleCount: 22, p50Ms: 10_000, p95Ms: 20_000 },
+    timeToComplete: { sampleCount: 20, p50Ms: 20_000, p95Ms: 38_000 },
+  });
+  expect(aggregateAiRunPerformance([])).toEqual({
+    timeToStart: { sampleCount: 0, p50Ms: null, p95Ms: null },
+    timeToComplete: { sampleCount: 0, p50Ms: null, p95Ms: null },
+  });
 });

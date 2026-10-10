@@ -242,6 +242,10 @@ export const LlmProviderSaveRequest = strict({
 export type LlmProviderSaveRequest = z.infer<typeof LlmProviderSaveRequest>;
 
 export const AiTokenUsage = strict({
+  performance: strict({
+    timeToStart: strict({ sampleCount: nonnegativeSafe, p50Ms: nonnegativeSafe.nullable(), p95Ms: nonnegativeSafe.nullable() }),
+    timeToComplete: strict({ sampleCount: nonnegativeSafe, p50Ms: nonnegativeSafe.nullable(), p95Ms: nonnegativeSafe.nullable() }),
+  }),
   points: z.array(strict({
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     inputTokens: tokenCount,
