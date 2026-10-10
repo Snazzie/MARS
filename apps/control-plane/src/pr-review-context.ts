@@ -145,6 +145,59 @@ export async function collectPrReviewContext(client: PrReviewContextClient, owne
   return context;
 }
 
+export async function fitPrReviewContext(
+  context: PrReviewContext,
+  fits: (context: PrReviewContext) => Promise<boolean>,
+): Promise<PrReviewContext> {
+  const fitted: PrReviewContext = {
+    pullRequest: { ...context.pullRequest },
+    files: context.files.map(file => ({
+      ...file,
+      changedLines: [...file.changedLines],
+      diffPositions: { ...file.diffPositions },
+      hunkIds: { ...file.hunkIds },
+    })),
+    rules: { ...context.rules },
+    coverage: { ...context.coverage, limitations: [...context.coverage.limitations] },
+  };
+  const markLimited = (message: string) => {
+    if (!fitted.coverage.limitations.includes(message)) fitted.coverage.limitations.push(message);
+    fitted.coverage.complete = false;
+  };
+  if (await fits(fitted)) return fitted;
+
+  if (fitted.pullRequest.description !== null) {
+    fitted.pullRequest.description = null;
+    markLimited("Pull request description omitted to fit the model context limit.");
+    if (await fits(fitted)) return fitted;
+  }
+
+  const metadata = fitted.files.filter(file => file.coverage !== "reviewable");
+  if (metadata.length) {
+    const removed = new Set(metadata);
+    fitted.files = fitted.files.filter(file => !removed.has(file));
+    fitted.coverage.consideredFiles -= metadata.length;
+    fitted.coverage.omittedFiles += metadata.length;
+    for (const file of metadata) {
+      markLimited(`${file.path.slice(0, 256)}${file.path.length > 256 ? "…" : ""}: metadata omitted to fit the model context limit.`);
+    }
+    if (await fits(fitted)) return fitted;
+  }
+
+  while (fitted.coverage.reviewableFiles > 1) {
+    const index = fitted.files.findLastIndex(file => file.coverage === "reviewable");
+    if (index < 0) break;
+    const [file] = fitted.files.splice(index, 1);
+    fitted.coverage.reviewableFiles--;
+    fitted.coverage.consideredFiles--;
+    fitted.coverage.omittedFiles++;
+    markLimited(`${file!.path.slice(0, 256)}${file!.path.length > 256 ? "…" : ""}: omitted to fit the model context limit.`);
+    if (await fits(fitted)) return fitted;
+  }
+
+  throw new Error("pr_review_context_too_large");
+}
+
 const unsafeText = (value: string) => value.replace(/@/g, "@\u200b").replace(/https?:\/\//gi, m => m.replace(":", "&#58;")).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 function markdownText(value: string): string {
   return unsafeText(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")

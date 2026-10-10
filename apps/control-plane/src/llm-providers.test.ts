@@ -166,7 +166,7 @@ test("LM Studio cold-loads once, reuses its instance, and reloads after eviction
   const studioClientFactory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
     llm: { model: async (_key, options) => {
       if (!loaded) { loads++; loaded = true; config = options.config ?? {}; }
-      return { identifier: "instance-1", getLoadConfig: async () => config };
+      return { identifier: "instance-1", getLoadConfig: async () => config, getContextLength: async () => 16384, applyPromptTemplate: async history => JSON.stringify(history), countTokens: async text => text.length };
     } },
     async [Symbol.asyncDispose]() {},
   });
@@ -223,7 +223,7 @@ test.each(["partial", "cpu-experts", "vram-cap", "engine-error"])("LM Studio rej
   const studioClientFactory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
     llm: { model: async () => {
       if (mode === "engine-error") throw new Error("private engine failure");
-      return { identifier: "model", getLoadConfig: async () => ({ gpu: { ratio: mode === "partial" ? 0.5 : 1, numCpuExpertLayersRatio: mode === "cpu-experts" ? 0.5 : "off" }, gpuStrictVramCap: mode === "vram-cap" }) };
+      return { identifier: "model", getLoadConfig: async () => ({ gpu: { ratio: mode === "partial" ? 0.5 : 1, numCpuExpertLayersRatio: mode === "cpu-experts" ? 0.5 : "off" }, gpuStrictVramCap: mode === "vram-cap" }), getContextLength: async () => 16384, applyPromptTemplate: async history => JSON.stringify(history), countTokens: async text => text.length };
     } },
     async [Symbol.asyncDispose]() {},
   });
@@ -276,4 +276,51 @@ test.each([undefined, null, 59.5, -1, 101, "85"])("invalid PR confidence %p cann
   const provider: LlmProviderConfig = { name: "cloud", kind: "openai-compatible", baseUrl: "http://localhost:11434/v1", model: "model" };
   const finding = { path: "calc.ts", line: 1, endLine: null, severity: "High", confidencePercent, evidence: "n / 0", impact: "Division by zero.", correction: "Use the denominator.", suggestion: null };
   await expect(generatePrReview({ provider, context: {} }, async () => Response.json({ choices: [{ message: { content: JSON.stringify({ findings: [finding] }) } }] }))).rejects.toThrow("llm_invalid_response");
+});
+
+test.each([8192, 4100])("PR reviews respect the loaded %p-token context and preserve immutable evidence", async contextLength => {
+  const source = {
+    pullRequest: { number: 7, title: "Review", description: "description".repeat(1000), baseSha: "a".repeat(40), headSha: "b".repeat(40) },
+    rules: { path: ".mars/pr-rules.md" as const, baseSha: "a".repeat(40), blobSha: null, status: "missing" as const, text: null },
+    files: [1, 2].map(number => ({ path: `file${number}.ts`, status: "modified", patch: "@@ -1 +1 @@\n-old\n+new", headSource: "new".repeat(500), coverage: "reviewable" as const, changedLines: [1], diffPositions: { 1: 1 }, hunkIds: { 1: 0 } })),
+    coverage: { changedFiles: 2, consideredFiles: 2, reviewableFiles: 2, omittedFiles: 0, complete: true, limitations: [] as string[] },
+  };
+  let submitted = false;
+  let captured: typeof source | undefined;
+  const studioClientFactory: NonNullable<Parameters<typeof generatePrReview>[0]["studioClientFactory"]> = () => ({
+    llm: { model: async () => ({
+      identifier: "model",
+      getLoadConfig: async () => ({ gpu: { ratio: 1, numCpuExpertLayersRatio: "off" }, gpuStrictVramCap: false, autoFit: false }),
+      getContextLength: async () => contextLength,
+      applyPromptTemplate: async chat => JSON.stringify(chat),
+      countTokens: async text => text.length,
+    }) },
+    async [Symbol.asyncDispose]() {},
+  });
+  const run = generatePrReview({
+    provider: { name: "Studio", kind: "lm-studio", baseUrl: "http://studio.test/v1", model: "model" },
+    context: source, studioClientFactory,
+    onContext: context => { captured = context as typeof source; },
+  }, async (url, init) => {
+    if (!String(url).endsWith("/chat/completions")) return Response.json({ models: [{ type: "llm", key: "model", loaded_instances: [{ id: "model" }] }] });
+    submitted = true;
+    const body = JSON.parse(String(init!.body));
+    if (JSON.stringify(body.messages).length + body.max_tokens > contextLength) throw new Error("oversized prompt submitted");
+    const context = JSON.parse(body.messages[1].content);
+    expect(context.files.map((file: { path: string }) => file.path)).toEqual(["file1.ts"]);
+    expect(context.files[0].headSource).toBe(source.files[0]!.headSource);
+    expect(context.rules).toEqual(source.rules);
+    expect(context.coverage).toMatchObject({ complete: false, reviewableFiles: 1, omittedFiles: 1 });
+    return Response.json({ choices: [{ message: { content: '{"findings":[]}' } }] });
+  });
+  if (contextLength === 4100) {
+    await expect(run).rejects.toThrow("pr_review_context_too_large");
+    expect(submitted).toBe(false);
+    expect(captured).toBeUndefined();
+  } else {
+    expect(await run).toEqual({ findings: [] });
+    expect(captured?.files.map(file => file.path)).toEqual(["file1.ts"]);
+    expect(source.files).toHaveLength(2);
+    expect(source.pullRequest.description).not.toBeNull();
+  }
 });

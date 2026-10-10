@@ -1,6 +1,6 @@
 import type { PrReviewResult } from "@mars/contracts";
 import { expect, test } from "bun:test";
-import { collectPrReviewContext, renderPrReview, validatePrReviewFindings, type PrReviewContextClient, type PrReviewPullRequest } from "./pr-review-context.ts";
+import { collectPrReviewContext, fitPrReviewContext, renderPrReview, validatePrReviewFindings, type PrReviewContextClient, type PrReviewPullRequest } from "./pr-review-context.ts";
 
 const pr: PrReviewPullRequest = { number: 9, state: "open", draft: false, baseSha: "base-sha", headSha: "head-sha", title: "Example", body: "description", changedFiles: 1 };
 const client: PrReviewContextClient = {
@@ -117,6 +117,40 @@ test("bounds file count and per-file source context without claiming complete co
   const sourceLimited = await collectPrReviewContext(oversizedSource, "acme", "repo", pr);
   expect(sourceLimited.files[0]).toMatchObject({ coverage: "limited", headSource: null });
   expect(sourceLimited.coverage.complete).toBe(false);
+});
+
+test("fits by dropping description and nonreviewable metadata before whole reviewable files", async () => {
+  const context = await collectPrReviewContext({
+    ...client,
+    files: async () => [
+      { filename: "src/one.ts", status: "modified", patch: "@@ -0,0 +1 @@\n+one", previousFilename: null },
+      { filename: "src/two.ts", status: "modified", patch: "@@ -0,0 +1 @@\n+two", previousFilename: null },
+      { filename: "image.png", status: "modified", patch: null, previousFilename: null },
+    ],
+    source: async (_owner, _repo, path) => ({ text: `${path}\n${"x".repeat(400)}`, sha: "head" }),
+  }, "acme", "repo", { ...pr, body: "long description", changedFiles: 3 });
+  const before = structuredClone(context);
+  const maxFiles = 2;
+  const fitted = await fitPrReviewContext(context, async candidate =>
+    candidate.pullRequest.description === null && candidate.files.length <= maxFiles);
+
+  expect(fitted.pullRequest.description).toBeNull();
+  expect(fitted.files.map(file => file.path)).toEqual(["src/one.ts", "src/two.ts"]);
+  expect(fitted.files.every(file => file.patch && file.headSource)).toBe(true);
+  expect(fitted.coverage).toMatchObject({ consideredFiles: 2, reviewableFiles: 2, omittedFiles: 1, complete: false });
+  expect(fitted.coverage.limitations).toEqual(expect.arrayContaining([
+    expect.stringContaining("description omitted"),
+    expect.stringContaining("image.png"),
+  ]));
+  expect(context).toEqual(before);
+});
+
+test("rejects fitting when rules or the sole reviewable file cannot fit", async () => {
+  const context = await collectPrReviewContext(client, "acme", "repo", pr);
+  const original = structuredClone(context);
+  await expect(fitPrReviewContext(context, async () => false)).rejects.toThrow("pr_review_context_too_large");
+  expect(context).toEqual(original);
+  expect(context.rules).toEqual(original.rules);
 });
 
 test("an entirely low-confidence result publishes no rejected finding or suggestion", async () => {

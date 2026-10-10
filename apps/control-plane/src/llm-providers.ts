@@ -2,10 +2,17 @@ import { PrReviewResult, LlmProviderDefaultApiRoots, type LlmProviderModelLookup
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { SecretBox } from "./auth.ts";
-import { LMStudioClient, type BaseLoadModelOpts, type LLMLoadModelConfig } from "@lmstudio/sdk";
+import { LMStudioClient, type BaseLoadModelOpts, type LLMLoadModelConfig, type ChatLike } from "@lmstudio/sdk";
+import { fitPrReviewContext, type PrReviewContext } from "./pr-review-context.ts";
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit & { timeout?: number | false }) => Promise<Response>;
-type StudioModel = { identifier: string; getLoadConfig(): Promise<LLMLoadModelConfig> };
+type StudioModel = {
+  identifier: string;
+  getLoadConfig(): Promise<LLMLoadModelConfig>;
+  getContextLength(): Promise<number>;
+  applyPromptTemplate(history: ChatLike): Promise<string>;
+  countTokens(input: string): Promise<number>;
+};
 type StudioClient = {
   llm: { model(key: string, options: BaseLoadModelOpts<LLMLoadModelConfig>): Promise<StudioModel> };
   [Symbol.asyncDispose](): Promise<void>;
@@ -28,6 +35,7 @@ export const PipelineAnalysisResult = z.object({
   }).strict()).max(20),
 }).strict();
 const pipelineAnalysisJsonSchema = zodToJsonSchema(PipelineAnalysisResult, { $refStrategy: "none" });
+const prReviewJsonSchema = zodToJsonSchema(PrReviewResult, { $refStrategy: "none" });
 export type PipelineAnalysisResult = z.infer<typeof PipelineAnalysisResult>;
 
 export type LlmProviderKind = "openai-compatible" | "lm-studio" | "anthropic";
@@ -174,7 +182,7 @@ const lmStudioModels = z.object({
   })).max(1000),
 });
 
-async function ensureLmStudioModel(root: string, model: string, headers: Headers, fetcher: Fetcher, factory: StudioClientFactory = createStudioClient): Promise<string> {
+async function ensureLmStudioModel(root: string, model: string, headers: Headers, fetcher: Fetcher, factory: StudioClientFactory = createStudioClient, prepare?: (model: StudioModel) => Promise<void>): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MODEL_LOAD_TIMEOUT_MS);
   let client: StudioClient | undefined;
@@ -199,11 +207,12 @@ async function ensureLmStudioModel(root: string, model: string, headers: Headers
       });
       const config = await instance.getLoadConfig();
       if (![1, "max"].includes(config.gpu?.ratio ?? "") || ![undefined, 0, "off"].includes(config.gpu?.numCpuExpertLayersRatio) || config.gpuStrictVramCap !== false || config.autoFit === true) throw new Error("llm_model_load_failed");
+      await prepare?.(instance);
       return z.string().min(1).max(200).parse(instance.identifier);
     })()]);
   } catch (cause) {
     if (controller.signal.aborted) throw new Error("llm_timeout");
-    if (cause instanceof Error && /^llm_/.test(cause.message)) throw cause;
+    if (cause instanceof Error && /^(llm_|pr_review_)/.test(cause.message)) throw cause;
     throw new Error(cause instanceof SyntaxError || cause instanceof z.ZodError ? "llm_invalid_response" : "llm_model_load_failed");
   } finally {
     clearTimeout(timeout);
@@ -216,16 +225,18 @@ async function requestProvider(input: {
   context: string;
   systemPrompt: string;
   responseSchema?: ReturnType<typeof zodToJsonSchema>;
+  responseSchemaName?: string;
   secretBox?: SecretBox;
   onRequest?: () => void | Promise<void>;
   onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void>;
   studioClientFactory?: StudioClientFactory;
+  prepareContext?: (model: StudioModel, apiKey: string | null) => Promise<string>;
 }, fetcher: Fetcher): Promise<string> {
   const provider = input.provider;
   const root = validateProviderApiRoot(provider.baseUrl);
   const apiKey = provider.encryptedApiKey ? (input.secretBox ? input.secretBox.decrypt(provider.encryptedApiKey) : provider.encryptedApiKey) : null;
   if (provider.kind === "anthropic" && !apiKey) throw new Error("llm_auth_failed");
-  const context = sanitizeProviderText(input.context, apiKey);
+  let context = sanitizeProviderText(input.context, apiKey);
   const endpoint = `${root}${provider.kind === "anthropic" ? "/messages" : "/chat/completions"}`;
   const headers = new Headers({ "content-type": "application/json", accept: "application/json" });
   let body: unknown;
@@ -235,10 +246,12 @@ async function requestProvider(input: {
     body = { model: provider.model, max_tokens: 4096, system: input.systemPrompt, messages: [{ role: "user", content: context }] };
   } else {
     if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
-    const model = provider.kind === "lm-studio" ? await ensureLmStudioModel(root, provider.model, headers, fetcher, input.studioClientFactory) : provider.model;
+    const model = provider.kind === "lm-studio" ? await ensureLmStudioModel(root, provider.model, headers, fetcher, input.studioClientFactory, input.prepareContext ? async instance => {
+      context = await input.prepareContext!(instance, apiKey);
+    } : undefined) : provider.model;
     body = {
       model, max_tokens: 4096, messages: [{ role: "system", content: input.systemPrompt }, { role: "user", content: context }],
-      ...(provider.kind === "lm-studio" && input.responseSchema ? { response_format: { type: "json_schema", json_schema: { name: "pipeline_analysis", strict: true, schema: input.responseSchema } } } : {}),
+      ...(provider.kind === "lm-studio" && input.responseSchema ? { response_format: { type: "json_schema", json_schema: { name: input.responseSchemaName ?? "pipeline_analysis", strict: true, schema: input.responseSchema } } } : {}),
     };
   }
   const controller = new AbortController();
@@ -270,6 +283,7 @@ export async function generatePrReview(input: {
   secretBox?: SecretBox;
   onRequest?: () => void | Promise<void>;
   onUsage?: (usage: PipelineAnalysisUsage | null) => void | Promise<void>;
+  onContext?: (context: PrReviewContext) => void | Promise<void>;
   studioClientFactory?: StudioClientFactory;
 }, fetcher: Fetcher = fetch): Promise<PrReviewResult> {
   let eligibilityError: Error | null = null;
@@ -284,7 +298,22 @@ export async function generatePrReview(input: {
   } : undefined;
   let content: string;
   try {
-    content = await requestProvider({ ...input, onRequest, onUsage, context: JSON.stringify(input.context), systemPrompt: prReviewSystemPrompt }, fetcher);
+    content = await requestProvider({
+      ...input, onRequest, onUsage, context: JSON.stringify(input.context), systemPrompt: prReviewSystemPrompt, responseSchema: prReviewJsonSchema, responseSchemaName: "pr_review",
+      prepareContext: async (model, apiKey) => {
+        const budget = await model.getContextLength() - 4096;
+        if (!Number.isSafeInteger(budget) || budget <= 0) throw new Error("pr_review_context_too_large");
+        const context = await fitPrReviewContext(input.context as PrReviewContext, async candidate => {
+          const rendered = await model.applyPromptTemplate([
+            { role: "system", content: prReviewSystemPrompt },
+            { role: "user", content: sanitizeProviderText(JSON.stringify(candidate), apiKey) },
+          ]);
+          return await model.countTokens(rendered) <= budget;
+        });
+        await input.onContext?.(context);
+        return sanitizeProviderText(JSON.stringify(context), apiKey);
+      },
+    }, fetcher);
   } catch (error) {
     if (eligibilityError) throw eligibilityError;
     throw error;

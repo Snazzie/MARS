@@ -27,7 +27,7 @@ const queries = defineQueries(db => {
     lockRepository: db.select({ id: r.id }).from(r).where(eq(r.id, placeholder("repositoryId"))).for("update").prepare("pr_review_lock_repository"),
     command: db.insert(schema.prReviewCommands).values({ organizationId: placeholder("organizationId"), repositoryId: placeholder("repositoryId"), commentId: placeholder("commentId"), requester: placeholder("requester") }).onConflictDoNothing().returning({ commentId: schema.prReviewCommands.commentId }).prepare("pr_review_command"),
     enqueue: db.insert(a).values({ organizationId: placeholder("organizationId"), repositoryId: placeholder("repositoryId"), prNumber: placeholder("prNumber"), baseSha: placeholder("baseSha"), headSha: placeholder("headSha"), trigger: placeholder("trigger"), commentId: placeholder("commentId"), requester: placeholder("requester"), providerId: placeholder("providerId"), providerSnapshot: placeholder("providerSnapshot"), settingsUpdatedAt: placeholder("settingsUpdatedAt"), analysisState: "pending", publicationState: "pending", source: placeholder("source") }).onConflictDoNothing().returning({ id: a.id }).prepare("pr_review_enqueue"),
-    retry: db.update(a).set({ analysisState: "pending", trigger: sql`${placeholder("trigger")}`, commentId: sql`${placeholder("commentId")}`, requester: sql`${placeholder("requester")}`, providerId: sql`${placeholder("providerId")}`, providerSnapshot: sql`${placeholder("retryProviderSnapshot")}::jsonb`, settingsUpdatedAt: sql`${placeholder("settingsUpdatedAt")}`, source: sql`${placeholder("retrySource")}::jsonb`, result: null, errorCode: null, startedAt: null, completedAt: null, providerCalledAt: null, inputTokens: null, outputTokens: null, tokensPerSecond: null, estimatedCostUsd: null }).where(and(eq(a.organizationId, placeholder("organizationId")), eq(a.repositoryId, placeholder("repositoryId")), eq(a.prNumber, placeholder("prNumber")), eq(a.baseSha, placeholder("baseSha")), eq(a.headSha, placeholder("headSha")), inArray(a.analysisState, ["failed", "skipped", "superseded"]), eq(a.publicationState, "pending"))).returning({ id: a.id }).prepare("pr_review_retry"),
+    retry: db.update(a).set({ analysisState: "pending", createdAt: sql`now()`, trigger: sql`${placeholder("trigger")}`, commentId: sql`${placeholder("commentId")}`, requester: sql`${placeholder("requester")}`, providerId: sql`${placeholder("providerId")}`, providerSnapshot: sql`${placeholder("retryProviderSnapshot")}::jsonb`, settingsUpdatedAt: sql`${placeholder("settingsUpdatedAt")}`, source: sql`${placeholder("retrySource")}::jsonb`, result: null, errorCode: null, startedAt: null, completedAt: null, providerCalledAt: null, inputTokens: null, outputTokens: null, tokensPerSecond: null, estimatedCostUsd: null }).where(and(eq(a.organizationId, placeholder("organizationId")), eq(a.repositoryId, placeholder("repositoryId")), eq(a.prNumber, placeholder("prNumber")), eq(a.baseSha, placeholder("baseSha")), eq(a.headSha, placeholder("headSha")), inArray(a.analysisState, ["failed", "skipped", "superseded"]), eq(a.publicationState, "pending"))).returning({ id: a.id }).prepare("pr_review_retry"),
     supersede: db.update(a).set({ analysisState: "superseded", errorCode: "pr_review_superseded", completedAt: sql`now()` }).where(and(eq(a.repositoryId, placeholder("repositoryId")), eq(a.prNumber, placeholder("prNumber")), inArray(a.analysisState, ["pending", "running"]), or(ne(a.baseSha, placeholder("baseSha")), ne(a.headSha, placeholder("headSha"))))).prepare("pr_review_supersede"),
     invalidate: db.update(a).set({ analysisState: "skipped", errorCode: "pr_review_closed_or_draft", completedAt: sql`now()` }).where(and(eq(a.repositoryId, placeholder("repositoryId")), eq(a.prNumber, placeholder("prNumber")), inArray(a.analysisState, ["pending", "running"]))).prepare("pr_review_invalidate"),
     interruptedAnalysis: db.update(a).set({ analysisState: "failed", errorCode: "pr_review_interrupted", completedAt: sql`now()` }).where(and(eq(a.analysisState, "running"), sql`${a.startedAt}<now()-interval '15 minutes'`)).prepare("pr_review_interrupted_analysis"),
@@ -217,7 +217,7 @@ export async function processPrReviews(deps: PrReviewDeps): Promise<void> {
 async function processPrReview(deps: PrReviewDeps, q: ReturnType<typeof queries>, row: ReviewRow): Promise<void> {
   try {
     const { client, owner, repo, pr } = await current(deps, row);
-    const context = await collectPrReviewContext(client, owner, repo, pr);
+    let context = await collectPrReviewContext(client, owner, repo, pr);
     await q.source.execute({ id: row.id, source: context });
     if (context.coverage.reviewableFiles === 0) {
       await q.finish.execute({ id: row.id, state: "skipped", errorCode: "pr_review_no_reviewable_source" });
@@ -227,6 +227,10 @@ async function processPrReview(deps: PrReviewDeps, q: ReturnType<typeof queries>
     const [stillRunning] = await q.load.execute({ id: row.id });
     if (stillRunning?.analysisState !== "running") return;
     const result = await (deps.generate ?? generatePrReview)({ provider, context, secretBox: deps.secretBox,
+      onContext: async fitted => {
+        context = fitted;
+        await q.source.execute({ id: row.id, source: fitted });
+      },
       onRequest: async () => {
         await current(deps, row);
         const [active] = await q.load.execute({ id: row.id });

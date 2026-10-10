@@ -180,6 +180,20 @@ inference. Existing partial-offload or capped instances fail visibly; MARS does 
 unload or replace them. Insufficient GPU memory is a load failure, not permission to
 silently fall back to CPU. Load a fitting model with full offload in LM Studio.
 
+Before PR inference, MARS uses the loaded LM Studio instance's tokenizer and prompt
+template to measure the actual system/user prompt against its context length, reserving
+4096 tokens for output. It does not enlarge or reload the operator's model. If needed,
+it omits the PR description, nonreviewable file metadata, then whole files, recording
+incomplete coverage. Retained patches/source and base-commit rules are never truncated.
+If even one reviewable file plus mandatory context cannot fit, the review fails with
+`pr_review_context_too_large` without inference. The exact fitted evidence is persisted
+and used to validate findings and render publication.
+
+LM Studio PR requests use the JSON schema generated from `PrReviewResult`, just as CI
+analyses use their result schema. Malformed or truncated output still fails validation.
+A fresh `/review` retry resets its enqueue timestamp so history ordering and queue-wait
+metrics describe the new attempt rather than the original failed attempt.
+
 
 Pull-request review has independent repository opt-in and **Enable all PR reviews**
 controls in **Settings**; CI failure-analysis enablement never enables it.

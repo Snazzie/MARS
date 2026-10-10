@@ -208,11 +208,13 @@ integration("a fresh command retries failed unposted work while replay and publi
   deps.generate = async () => { throw new Error("llm_auth_failed"); };
   await processPrReviews(deps);
   expect((await db.select().from(schema.prReviews))[0].analysisState).toBe("failed");
+  await db.update(schema.prReviews).set({ createdAt: "2026-10-01T00:00:00Z" });
   deps.generate = async () => {
     observed.modelCalls++;
     return { findings: [{ path: "calc.ts", line: 1, endLine: null, severity: "High", confidencePercent: 85, evidence: "return n / 0;", impact: "Every call divides by zero instead of the denominator.", correction: "Use d as denominator.", suggestion: { startLine: 1, endLine: 1, originalText: "return n / 0;", replacementText: "return n / d;", rationale: "Uses the caller denominator." } }] };
   };
   await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 51 } }, "retry");
+  expect(Date.parse((await db.select().from(schema.prReviews))[0].createdAt)).toBeGreaterThan(Date.parse("2026-10-01T00:00:00Z"));
   await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 51 } }, "retry-replay");
   await processPrReviews(deps);
   await handlePrReviewWebhook(deps, "issue_comment", { ...event, comment: { ...event.comment, id: 52 } }, "published-command");
@@ -435,4 +437,31 @@ integration("global PR settings require admin rights and preserve CI and reposit
   expect(await disabled.json()).toMatchObject({ enableAll: false, providerId, enabledSince: null });
   expect((await db.select().from(schema.repositoryPrReviewSettings))[0]).toEqual(local);
   expect((await db.select().from(schema.globalFailureAnalysisSettings))[0]).toEqual(ci);
+}));
+
+integration("review findings and publication use only the fitted evidence retained for inference", () => fixture(async db => {
+  const { deps, observed, event } = scenario(db);
+  const fetcher = deps.githubFetch!;
+  deps.githubFetch = (async (input, init) => {
+    if (new URL(String(input)).pathname.endsWith("/files")) return Response.json([
+      { filename: "calc.ts", status: "modified", patch: "@@ -1 +1 @@\n-return n / d;\n+return n / 0;" },
+      { filename: "other.ts", status: "modified", patch: "@@ -1 +1 @@\n-return n / d;\n+return n / 0;" },
+    ]);
+    return fetcher(input, init);
+  }) as typeof fetch;
+  const generate = deps.generate!;
+  deps.generate = async input => {
+    const context = structuredClone(input.context) as Awaited<ReturnType<typeof collectPrReviewContext>>;
+    context.files = context.files.filter(file => file.path === "other.ts");
+    context.coverage = { ...context.coverage, consideredFiles: 1, reviewableFiles: 1, omittedFiles: 1, complete: false, limitations: ["calc.ts: omitted to fit the model context limit."] };
+    await input.onContext!(context);
+    return generate(input);
+  };
+  await handlePrReviewWebhook(deps, "issue_comment", event, "fitted-context");
+  await processPrReviews(deps);
+  const [review] = await db.select().from(schema.prReviews);
+  expect(review!.result).toEqual({ findings: [] });
+  expect(review!.source).toMatchObject({ files: [{ path: "other.ts" }] });
+  expect(observed.posts[0]!.comments).toEqual([]);
+  expect(review!.source).toMatchObject({ coverage: { complete: false, consideredFiles: 1, reviewableFiles: 1, omittedFiles: 1 } });
 }));
