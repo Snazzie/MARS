@@ -31,9 +31,9 @@ test("filters low-confidence and unsupported findings, and emits one safe RIGHT-
   expect(result.findings).toHaveLength(1);
   const rendered = renderPrReview(result, context, "mars-pr-review:2:9:base:head");
   expect(rendered.body).toContain("<!-- mars-pr-review:2:9:base:head -->");
-  expect(rendered.comments[0]!.body).toContain("60% confidence");
   expect(rendered.comments).toEqual([{ path: "src/example.ts", line: 2, side: "RIGHT", body: expect.stringContaining("```suggestion\nreturn value;\n```") }]);
   expect(rendered.comments[0]!.body).not.toContain("@team");
+  expect(rendered.comments[0]!.body).toContain(`${result.findings[0]!.confidencePercent}% confidence`);
 });
 
 test("rejects mismatched replacement text and excludes deleted, generated, and unpatched sources", async () => {
@@ -62,6 +62,7 @@ test("keeps validated evidence as summary-only when inline locations are unsuppo
   expect(rendered.comments).toEqual([]);
   expect(rendered.body).toContain("`src/example.ts`");
   expect(rendered.body).not.toContain("src/example.ts:99");
+  expect(rendered.body).toContain(`${summary.findings[0]!.confidencePercent}% confidence`);
 });
 
 test("deleted-file evidence remains explanation-only and overlapping suggestions are both rejected", async () => {
@@ -157,8 +158,50 @@ test("an entirely low-confidence result publishes no rejected finding or suggest
   const context = await collectPrReviewContext(client, "acme", "repo", pr);
   const rendered = renderPrReview({ findings: [finding({ confidencePercent: 59 })] }, context, "marker");
   expect(rendered.comments).toEqual([]);
-  expect(rendered.body).toContain("No actionable findings in the reviewed scope.");
   expect(rendered.body).not.toContain("59%");
   expect(rendered.body).not.toContain("The operation always fails");
   expect(rendered.body).not.toContain("```suggestion");
+});
+
+test("partial reviews keep the warning visible and collapse deduplicated final file limitations", async () => {
+  const context = await collectPrReviewContext(client, "acme", "repo", pr);
+  context.coverage.complete = false;
+  context.coverage.limitations = [
+    "60 changed files omitted by the 40-file limit.",
+    "apps/backend/src/runtime/boot.ts: limited.",
+    "apps/backend/src/runtime/boot.ts: omitted to fit the context limit.",
+    "46 changed files were not returned by GitHub.",
+  ];
+  const { body } = renderPrReview({ findings: [] }, context, "marker");
+  const collapsedAt = body.indexOf("<details>");
+  const visible = body.slice(0, collapsedAt);
+  const details = body.slice(collapsedAt, body.indexOf("</details>"));
+  expect(visible).toContain("Partial review");
+  expect(visible).not.toContain("60 changed files");
+  expect(visible).not.toContain("apps/backend/src/runtime/boot.ts");
+  expect(details.match(/apps\/backend\/src\/runtime\/boot\.ts/g)).toHaveLength(1);
+  expect(details).toContain("Excluded by context limit");
+  expect(details).not.toContain("Limited context");
+  expect(details).toContain("60 changed files");
+  expect(details).toContain("46 changed files");
+});
+
+test("complete reviews do not show a partial warning or repeat the inline file location", async () => {
+  const context = await collectPrReviewContext(client, "acme", "repo", pr);
+  const rendered = renderPrReview({ findings: [finding()] }, context, "marker");
+  expect(rendered.body.slice(0, rendered.body.indexOf("<details>"))).not.toContain("Partial review");
+  expect(rendered.comments[0]!.body).not.toContain("src/example.ts");
+  expect(rendered.comments[0]!.body).toContain("```suggestion\nreturn value;\n```");
+});
+
+test("large Unicode scope reports stay byte bounded with a closed details section and advisory", async () => {
+  const context = await collectPrReviewContext(client, "acme", "repo", pr);
+  context.coverage.complete = false;
+  context.coverage.limitations = Array.from({ length: 500 }, (_, i) => `src/${i}-${"界".repeat(100)}.ts: limited.`);
+  const { body } = renderPrReview({ findings: [] }, context, "marker");
+  expect(Buffer.byteLength(body)).toBeLessThanOrEqual(49_000);
+  expect(body).not.toContain("\uFFFD");
+  expect(body.indexOf("</details>")).toBeGreaterThan(body.indexOf("<details>"));
+  expect(body).toContain("Additional scope details omitted");
+  expect(body.slice(body.indexOf("</details>"))).toContain("not an approval");
 });

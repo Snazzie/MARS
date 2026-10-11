@@ -83,7 +83,6 @@ integration("authorized commands reuse current revision and publish one pinned n
   expect(observed.modelCalls).toBe(1);
   expect(observed.posts).toHaveLength(1);
   expect(observed.posts[0]).toMatchObject({ event: "COMMENT", commit_id: head, comments: [{ path: "calc.ts", line: 1, side: "RIGHT" }] });
-  expect(JSON.stringify(observed.posts[0])).toContain("85% confidence");
   expect(JSON.stringify(observed.posts[0])).toContain("suggestion");
   const [row] = await db.select().from(schema.prReviews);
   expect(row).toMatchObject({ analysisState: "completed", publicationState: "published", headSha: head });

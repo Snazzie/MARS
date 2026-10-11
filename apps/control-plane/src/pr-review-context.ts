@@ -280,28 +280,67 @@ export function renderPrReview(result: PrReviewResult, context: PrReviewContext,
     const line = suggestion?.endLine ?? findingLine;
     const inline = locationValid && Boolean(file.diffPositions[startLine]) && Boolean(file.diffPositions[line]);
     const location = locationValid ? `${finding.path}:${finding.line}${findingLine !== finding.line ? `-${findingLine}` : ""}` : finding.path;
-    const bullet = `- **${finding.severity} · ${finding.confidencePercent}% confidence** — ${markdownCode(location)}: ${markdownText(finding.impact)} Correction: ${markdownText(finding.correction)}`;
-    if (!inline) { summaryOnly.push(bullet); continue; }
-    const sections = [bullet];
+    const description = [`**${finding.severity} priority** · **${finding.confidencePercent}% confidence** (model estimate)`, markdownText(finding.impact), `**Suggested fix:** ${markdownText(finding.correction)}`];
+    const summary = [`### ${markdownCode(location)}`, ...description].join("\n\n");
+    if (!inline) { summaryOnly.push(summary); continue; }
+    const sections = [...description];
     if (suggestion) {
       sections.push(markdownText(suggestion.rationale), `\`\`\`suggestion\n${suggestion.replacementText}\n\`\`\``);
     }
     const commentBody = sections.join("\n\n");
     const commentBytes = byteLength(commentBody);
-    if (inlineBytes + commentBytes > maxInlineBytes) { summaryOnly.push(bullet); continue; }
+    if (inlineBytes + commentBytes > maxInlineBytes) { summaryOnly.push(summary); continue; }
     inlineBytes += commentBytes;
     comments.push({ path: finding.path, line, ...(line !== startLine ? { start_line: startLine, start_side: "RIGHT" as const } : {}), side: "RIGHT", body: commentBody });
   }
   const cov = context.coverage;
-  const coverage = cov.complete ? "Coverage: all returned changed files were reviewed." : `Coverage limitations: ${context.coverage.limitations.map(markdownText).join("; ")}`;
-  const findings = summaryOnly.length ? summaryOnly.join("\n") : validated.findings.length ? "Actionable findings are described in the inline comments." : "No actionable findings in the reviewed scope.";
-  const rules = context.rules.status === "present" ? `Base rules: ${context.rules.path} at ${context.rules.baseSha} (blob ${context.rules.blobSha}).` : `Base rules: ${context.rules.status === "missing" ? "none present" : "loading failed"} at ${context.rules.path} (${context.rules.baseSha}).`;
-  const disclaimer = "AI-generated advisory review; verify findings and suggestions. This is not an approval or exhaustive safety guarantee.";
-  const primary = [`<!-- ${marker.replace(/[<>\r\n]/g, "")} -->`, "## MARS AI pull request review", `Reviewed head: \`${context.pullRequest.headSha}\` (base \`${context.pullRequest.baseSha}\`).`, rules, coverage, "", findings].join("\n");
-  const maxPrimaryBytes = 49_000 - byteLength(disclaimer) - 1;
+  const count = validated.findings.length;
+  const resultText = count ? `**Found ${count} ${count === 1 ? "issue" : "issues"} worth addressing.**` : "**No actionable issues found in the reviewed changes.**";
+  const warning = cov.complete ? "" : "> **Partial review:** Some changed files or context were unavailable. This result does not cover the entire PR.";
+  const findings = summaryOnly.length ? `### Findings\n\n${summaryOnly.join("\n\n")}` : "";
+  const inlineNote = comments.length ? "Suggested fixes and explanations are attached to the relevant lines." : "";
+  const disclaimer = "*AI-assisted review—not an approval. Verify suggested changes before applying.*";
+  const primary = [`<!-- ${marker.replace(/[<>\r\n]/g, "")} -->`, "## MARS review", resultText, warning, inlineNote, findings].filter(Boolean).join("\n\n");
+  // Leave room for scope metadata and always close the collapsed section.
   const bytes = Buffer.from(primary, "utf8");
-  let end = Math.min(bytes.length, maxPrimaryBytes);
+  let end = Math.min(bytes.length, 40_000);
   while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
-  const body = `${bytes.subarray(0, end).toString("utf8")}\n${disclaimer}`;
+  const main = bytes.subarray(0, end).toString("utf8") + (end < bytes.length ? "\n\nAdditional findings omitted to fit GitHub's comment limit." : "");
+  const fileLimitations = new Map<string, string>();
+  const otherLimitations = new Set<string>();
+  for (const limitation of cov.limitations) {
+    const match = limitation.match(/^(.*): (limited|missing patch|deleted|renamed|excluded|source unavailable|(?:metadata )?omitted to fit the (?:model )?context limit)\.$/);
+    if (match) fileLimitations.set(match[1]!, match[2]!);
+    else otherLimitations.add(limitation);
+  }
+  const fileStatuses: Record<string, string> = {
+    limited: "Limited context", "missing patch": "Diff unavailable",
+    "source unavailable": "Source unavailable", excluded: "Excluded from review",
+    deleted: "Deleted file", renamed: "Renamed file",
+  };
+  const rules = context.rules.status === "present" ? `Used ${markdownCode(context.rules.path)} from the base revision.`
+    : context.rules.status === "missing" ? `No custom guidelines found at ${markdownCode(context.rules.path)}.`
+    : `Could not load ${markdownCode(context.rules.path)}.`;
+  const detailRows = [
+    `- Reviewed commit: ${markdownCode(context.pullRequest.headSha.slice(0, 7))}`,
+    `- Base commit: ${markdownCode(context.pullRequest.baseSha.slice(0, 7))}`,
+    `- Scope: ${cov.reviewableFiles} of ${cov.changedFiles} changed files had full source and diff context.`,
+    `- Repository guidelines: ${rules}`,
+    ...(otherLimitations.size ? ["", "### Review limitations", ...Array.from(otherLimitations, item => `- ${markdownText(item)}`)] : []),
+    ...(fileLimitations.size ? ["", "### Affected files", ...Array.from(fileLimitations, ([path, status]) => `- ${markdownCode(unsafeText(path))} — ${status.includes("omitted") ? "Excluded by context limit" : fileStatuses[status]}`)] : []),
+  ];
+  const open = "<details>\n<summary>Review scope and limitations</summary>\n";
+  const close = "\n\n</details>";
+  const omitted = "\n- Additional scope details omitted to fit GitHub's comment limit.";
+  const detailBudget = 49_000 - byteLength(main) - byteLength(disclaimer) - byteLength(open) - byteLength(close) - byteLength(omitted) - 6;
+  const details: string[] = [];
+  let detailBytes = 0;
+  for (const row of detailRows) {
+    const size = byteLength(row) + 1;
+    if (detailBytes + size > detailBudget) { details.push(omitted); break; }
+    details.push(row);
+    detailBytes += size;
+  }
+  const body = `${main}\n\n${open}\n${details.join("\n")}${close}\n\n${disclaimer}`;
   return { body, comments };
   }

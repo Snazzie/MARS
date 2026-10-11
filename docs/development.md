@@ -238,6 +238,17 @@ errors. Provider usage/cost uses the captured provider pricing and reported toke
 unknown usage/pricing is shown as unavailable, not free. Existing reviews remain tied
 to the exact reviewed commit.
 
+PR comments lead with the result and keep a partial-review warning visible when
+coverage is incomplete. Commit identifiers, repository guidelines, and coverage
+diagnostics live in a collapsed **Review scope and limitations** section. File
+limitations are listed once per path using their final recorded status, rather
+than repeating intermediate context-fitting diagnostics. Full-context file counts
+are not claims that every changed file was reviewed. Inline findings separate the
+impact from the suggested fix; GitHub already supplies their file and line location.
+Every finding shows its confidence percentage, labeled as a model estimate,
+including findings that can only be published in the summary.
+Scope details are byte-bounded without cutting the collapsed section's closing tag.
+
 The GitHub App needs `pull_request` and `issue_comment` webhook subscriptions and
 existing installed Apps may need their subscriptions refreshed in GitHub App settings;
 updating the generated manifest alone does not change existing installations.
