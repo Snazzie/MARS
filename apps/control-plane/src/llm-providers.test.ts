@@ -174,7 +174,7 @@ test("LM Studio cold-loads once, reuses its instance, and reloads after eviction
   const studioClientFactory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
     llm: { model: async (_key, options) => {
       if (!loaded) { loads++; loaded = true; config = options.config ?? {}; }
-      return { identifier: "instance-1", getLoadConfig: async () => config, getContextLength: async () => 16384, applyPromptTemplate: async history => JSON.stringify(history), countTokens: async text => text.length, respond: () => studioPrediction(JSON.stringify(valid)) };
+      return { identifier: "instance-1", getLoadConfig: async () => config, getContextLength: async () => config.contextLength ?? 8192, applyPromptTemplate: async history => JSON.stringify(history), countTokens: async text => text.length, respond: () => studioPrediction(JSON.stringify(valid)) };
     } },
     async [Symbol.asyncDispose]() {},
   });
@@ -281,11 +281,11 @@ test.each([undefined, null, 59.5, -1, 101, "85"])("invalid PR confidence %p cann
   await expect(generatePrReview({ provider, context: {} }, async () => Response.json({ choices: [{ message: { content: JSON.stringify({ findings: [finding] }) } }] }))).rejects.toThrow("llm_invalid_response");
 });
 
-test.each([8192, 4100])("PR reviews respect the loaded %p-token context and preserve immutable evidence", async contextLength => {
+test.each([25000, 8192])("PR reviews enforce the loaded %p-token context and preserve immutable evidence", async contextLength => {
   const source = {
     pullRequest: { number: 7, title: "Review", description: "description".repeat(1000), baseSha: "a".repeat(40), headSha: "b".repeat(40) },
     rules: { path: ".mars/pr-rules.md" as const, baseSha: "a".repeat(40), blobSha: null, status: "missing" as const, text: null },
-    files: [1, 2].map(number => ({ path: `file${number}.ts`, status: "modified", patch: "@@ -1 +1 @@\n-old\n+new", headSource: "new".repeat(500), coverage: "reviewable" as const, changedLines: [1], diffPositions: { 1: 1 }, hunkIds: { 1: 0 } })),
+    files: [1, 2].map(number => ({ path: `file${number}.ts`, status: "modified", patch: "@@ -1 +1 @@\n-old\n+new", headSource: "new".repeat(4000), coverage: "reviewable" as const, changedLines: [1], diffPositions: { 1: 1 }, hunkIds: { 1: 0 } })),
     coverage: { changedFiles: 2, consideredFiles: 2, reviewableFiles: 2, omittedFiles: 0, complete: true, limitations: [] as string[] },
   };
   let submitted = false;
@@ -297,9 +297,9 @@ test.each([8192, 4100])("PR reviews respect the loaded %p-token context and pres
       getContextLength: async () => contextLength,
       applyPromptTemplate: async chat => JSON.stringify(chat),
       countTokens: async text => text.length,
-      respond: (history, options) => {
+      respond: history => {
         submitted = true;
-        if (JSON.stringify(history).length + Number(options.maxTokens) > contextLength) throw new Error("oversized prompt submitted");
+        if (JSON.stringify(history).length + 4096 > contextLength) throw new Error("oversized prompt submitted");
         const context = captured!;
         expect(context.files.map(file => file.path)).toEqual(["file1.ts"]);
         expect(context.files[0]!.headSource).toBe(source.files[0]!.headSource);
@@ -315,8 +315,8 @@ test.each([8192, 4100])("PR reviews respect the loaded %p-token context and pres
     context: source, studioClientFactory,
     onContext: context => { captured = context as typeof source; },
   }, async () => Response.json({ models: [{ type: "llm", key: "model", loaded_instances: [{ id: "model" }] }] }));
-  if (contextLength === 4100) {
-    await expect(run).rejects.toThrow("pr_review_context_too_large");
+  if (contextLength === 8192) {
+    await expect(run).rejects.toThrow("llm_model_load_failed");
     expect(submitted).toBe(false);
     expect(captured).toBeUndefined();
   } else {
@@ -337,7 +337,7 @@ test("LM Studio publishes live input and output usage before generation finishes
   const factory: NonNullable<Parameters<typeof generatePipelineAnalysis>[0]["studioClientFactory"]> = () => ({
     llm: { model: async () => ({
       identifier: "model", getLoadConfig: async () => ({ gpu: { ratio: 1, numCpuExpertLayersRatio: "off" }, gpuStrictVramCap: false, autoFit: false }),
-      getContextLength: async () => 8192, applyPromptTemplate: async () => "rendered prompt", countTokens: async () => 12,
+      getContextLength: async () => 25000, applyPromptTemplate: async () => "rendered prompt", countTokens: async () => 12,
       respond: () => Object.assign(release.promise.then(() => ({ content, nonReasoningContent: content, stats: { stopReason: "eosFound" as const, promptTokensCount: 13, predictedTokensCount: 10, tokensPerSecond: 8 } })), {
         async *[Symbol.asyncIterator]() {
           clock = 1000;

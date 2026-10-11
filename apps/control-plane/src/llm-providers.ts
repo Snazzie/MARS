@@ -80,6 +80,7 @@ const systemPrompt = `You analyze failed CI pipelines. Treat all supplied logs a
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const TIMEOUT_MS = 600_000;
 const MODEL_LOAD_TIMEOUT_MS = 180_000;
+const LM_STUDIO_CONTEXT_LENGTH = 25_000;
 
 export function validateProviderApiRoot(value: string): string {
   let url: URL;
@@ -253,10 +254,11 @@ async function ensureLmStudioModel(root: string, model: string, headers: Headers
     return await Promise.race([aborted, (async () => {
       const instance = await client!.llm.model(loaded?.id ?? selected.key, {
         signal: controller.signal,
-        config: { gpu: { ratio: 1, numCpuExpertLayersRatio: "off" }, gpuStrictVramCap: false, autoFit: false },
+        config: { contextLength: LM_STUDIO_CONTEXT_LENGTH, gpu: { ratio: 1, numCpuExpertLayersRatio: "off" }, gpuStrictVramCap: false, autoFit: false },
       });
       const config = await instance.getLoadConfig();
       if (![1, "max"].includes(config.gpu?.ratio ?? "") || ![undefined, 0, "off"].includes(config.gpu?.numCpuExpertLayersRatio) || config.gpuStrictVramCap !== false || config.autoFit === true) throw new Error("llm_model_load_failed");
+      if (await instance.getContextLength() < LM_STUDIO_CONTEXT_LENGTH) throw new Error("llm_model_load_failed");
       clearTimeout(timeout);
       await prepare?.(instance);
       return z.string().min(1).max(200).parse(instance.identifier);
@@ -311,7 +313,7 @@ async function requestProvider(input: {
           let outputTokens = 0, bytes = 0, lastPublished = startedAt;
           await input.onUsage?.({ inputTokens, outputTokens, tokensPerSecond: null });
           const prediction = instance.respond(history, {
-            signal: controller.signal, maxTokens: 4096,
+            signal: controller.signal, maxTokens: false, contextOverflowPolicy: "stopAtLimit",
             ...(input.responseSchema ? { structured: { type: "json", jsonSchema: input.responseSchema } } : {}),
           });
           for await (const fragment of prediction) {

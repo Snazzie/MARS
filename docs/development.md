@@ -171,18 +171,22 @@ head SHA. Empty feedback records alone are not evidence that a run has no associ
 LM Studio profiles use the native server's model-discovery HTTP API and the official
 SDK's WebSocket model-management endpoint at the same API root (remove `/v1` and use
 `ws`/`wss`; reverse-proxy prefixes are preserved). Expose both routes to the control
-plane. Generation remains OpenAI-compatible HTTP. Authentication uses the saved
+plane. LM Studio generation uses the SDK's native WebSocket transport. Authentication uses the saved
 profile's native LM Studio token, not an ambient `LM_API_TOKEN`.
-Automatic loading requests full GPU weight offload, disables CPU expert offload,
-VRAM-cap fallback, and automatic fitting. It preserves other operator load settings.
-The effective load configuration is checked before sending logs or source for
-inference. Existing partial-offload or capped instances fail visibly; MARS does not
-unload or replace them. Insufficient GPU memory is a load failure, not permission to
-silently fall back to CPU. Load a fitting model with full offload in LM Studio.
+Automatic loading requests a 25,000-token context and full GPU weight offload, disabling
+CPU expert offload, VRAM-cap fallback, and automatic fitting. Other operator load settings
+are preserved. The engine may round the requested context length upward.
+The effective load configuration and context length are checked before inference.
+Existing instances below 25,000 tokens or with partial-offload/capped settings fail
+visibly; MARS does not unload or replace them. Manually reload those instances with at
+least 25,000 tokens and full offload. Insufficient GPU memory is a load failure, not
+permission to silently fall back to CPU.
 
 Before PR inference, MARS uses the loaded LM Studio instance's tokenizer and prompt
 template to measure the actual system/user prompt against its context length, reserving
-4096 tokens for output. It does not enlarge or reload the operator's model. If needed,
+4096 tokens as a minimum output allowance, not a generation cap. LM Studio generation
+has no fixed output-token cap and stops at the context boundary rather than discarding
+earlier evidence. It does not reload an already-loaded operator model. If needed,
 it omits the PR description, nonreviewable file metadata, then whole files, recording
 incomplete coverage. Retained patches/source and base-commit rules are never truncated.
 If even one reviewable file plus mandatory context cannot fit, the review fails with
